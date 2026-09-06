@@ -80,6 +80,75 @@ def percent_change(
     return float(((new_value - old_value) / old_value) * Decimal("100"))
 
 
+def normalize_http_url(url: str, default: str) -> str:
+    value = (url or "").strip().rstrip("/")
+    if not value:
+        return default.rstrip("/")
+    if value.startswith("//"):
+        value = "https:" + value
+    if "://" not in value:
+        value = "https://" + value
+    return value.rstrip("/")
+
+
+def local_momentum_analysis(
+    product_id: str,
+    market_data: dict[str, Any],
+) -> Godmod3Analysis:
+    product = market_data.get("product")
+    if not isinstance(product, dict):
+        product = market_data if isinstance(market_data, dict) else {}
+    candles = market_data.get("candles", [])
+    if not isinstance(candles, list):
+        candles = []
+    summary = summarize_candles(candles)
+    change_5m = summary.get("change_5m_percent") or 0.0
+    change_15m = summary.get("change_15m_percent") or 0.0
+    change_1h = summary.get("change_1h_percent") or 0.0
+    change_window = summary.get("change_full_window_percent") or 0.0
+    try:
+        change_24h = float(product.get("price_percentage_change_24h") or 0)
+    except (TypeError, ValueError):
+        change_24h = 0.0
+
+    score = (
+        (change_5m * 2.0)
+        + (change_15m * 1.5)
+        + change_1h
+        + (change_window * 0.25)
+        + (change_24h * 0.35)
+    )
+    if score >= 0.02:
+        action = "BUY"
+        confidence = min(90, 68 + int(abs(score) * 20))
+        rationale = (
+            "Local momentum fallback BUY: "
+            f"5m={change_5m:.4f}%, 15m={change_15m:.4f}%, "
+            f"1h={change_1h:.4f}%, 24h={change_24h:.4f}%."
+        )
+    elif score <= -0.02:
+        action = "SELL"
+        confidence = min(90, 68 + int(abs(score) * 20))
+        rationale = (
+            "Local momentum fallback SELL: "
+            f"5m={change_5m:.4f}%, 15m={change_15m:.4f}%, "
+            f"1h={change_1h:.4f}%, 24h={change_24h:.4f}%."
+        )
+    else:
+        action = "HOLD"
+        confidence = 55
+        rationale = (
+            "Local momentum fallback HOLD: no usable directional bias "
+            f"(score={score:.4f})."
+        )
+    return Godmod3Analysis(
+        product_id=product_id,
+        action=action,
+        confidence=confidence,
+        rationale=rationale,
+    )
+
+
 def summarize_candles(candles: list[dict[str, Any]]) -> dict[str, Any]:
     if not candles:
         return {
@@ -153,13 +222,15 @@ def summarize_candles(candles: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 SYSTEM_PROMPT = (
-    "You are a cryptocurrency market-analysis engine. "
+    "You are a live cryptocurrency trading signal engine. "
     "You analyze only and never execute orders. "
     "Base your decision ONLY on the market data supplied in the user message. "
     "Never invent news, indicators, prices, volume, technical signals, or "
     "market conditions that were not provided. "
-    "BUY or SELL should require meaningful directional evidence. "
-    "If the supplied data does not justify a directional trade, return HOLD. "
+    "Prefer BUY or SELL whenever short-term price has a directional bias. "
+    "Use BUY for positive 5m/15m/1h or 24h momentum. "
+    "Use SELL for negative 5m/15m/1h or 24h momentum. "
+    "Use HOLD only when every supplied change is essentially flat. "
     "Confidence represents how strongly the supplied market data supports "
     "the chosen action. Return exactly one JSON object containing "
     "product_id, action, confidence, and rationale. "
@@ -190,10 +261,7 @@ class MarketAnalyzer:
         if getattr(settings, "godmode_api_key", "") or getattr(
             settings, "openrouter_api_key", ""
         ):
-            if getattr(settings, "godmode_base_url", "") or getattr(
-                settings, "openrouter_base_url", ""
-            ):
-                providers.append("openrouter")
+            providers.append("openrouter")
         return providers
 
     def _snapshot(
@@ -404,11 +472,11 @@ class MarketAnalyzer:
             getattr(settings, "godmode_api_key", "")
             or getattr(settings, "openrouter_api_key", "")
         )
-        base_url = (
+        base_url = normalize_http_url(
             getattr(settings, "godmode_base_url", "")
-            or getattr(settings, "openrouter_base_url", "")
-            or "https://openrouter.ai/api/v1"
-        ).rstrip("/")
+            or getattr(settings, "openrouter_base_url", ""),
+            "https://openrouter.ai/api/v1",
+        )
         model = (
             getattr(settings, "godmode_model", "")
             or getattr(settings, "openrouter_model", "")
@@ -462,6 +530,16 @@ class MarketAnalyzer:
                 content = await caller(SYSTEM_PROMPT, user_prompt)
                 analysis = self._parse_analysis(product_id, content)
                 self.last_provider = name
+                if analysis.action in {"BUY", "SELL"} and analysis.confidence >= 50:
+                    return analysis
+                fallback = local_momentum_analysis(product_id, market_data)
+                if fallback.action != "HOLD":
+                    self.last_provider = f"{name}+local_momentum"
+                    fallback.rationale = (
+                        f"LLM returned {analysis.action} ({analysis.confidence}). "
+                        + fallback.rationale
+                    )
+                    return fallback
                 return analysis
             except (
                 Godmod3Error,
@@ -474,9 +552,26 @@ class MarketAnalyzer:
             ) as exc:
                 errors.append(f"{name}: {exc}")
 
-        raise Godmod3Error(
-            "All analysis providers failed: " + " | ".join(errors[:5])
-        )
+        if errors:
+            try:
+                self.last_provider = "local_momentum"
+                analysis = local_momentum_analysis(product_id, market_data)
+                analysis.rationale = (
+                    analysis.rationale
+                    + " LLM providers failed: "
+                    + " | ".join(errors[:3])
+                )
+                return analysis
+            except Exception:
+                pass
+
+        try:
+            self.last_provider = "local_momentum"
+            return local_momentum_analysis(product_id, market_data)
+        except Exception as exc:
+            raise Godmod3Error(
+                "All analysis providers failed: " + " | ".join(errors[:5] or [str(exc)])
+            ) from exc
 
 
 godmod3_client = MarketAnalyzer()

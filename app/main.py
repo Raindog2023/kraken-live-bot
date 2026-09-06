@@ -17,11 +17,13 @@ from .godmod3_client import Godmod3Analysis, Godmod3Error, godmod3_client
 from .kraken_client import KrakenError, kraken_client, to_kraken_pair
 
 
+CODE_VERSION = "2.7.0-live-ai"
+AUTONOMOUS_ENABLED = True
 AUTONOMOUS_PRODUCT_ID = "BTC-USD"
 AUTONOMOUS_QUOTE_AMOUNT = Decimal("50")
-AUTONOMOUS_MIN_CONFIDENCE = 65
-AUTONOMOUS_SCAN_SECONDS = 300
-AUTONOMOUS_TRADE_COOLDOWN_SECONDS = 900
+AUTONOMOUS_MIN_CONFIDENCE = 50
+AUTONOMOUS_SCAN_SECONDS = 60
+AUTONOMOUS_TRADE_COOLDOWN_SECONDS = 180
 
 _scan_in_progress = False
 _last_trade_at: datetime | None = None
@@ -49,7 +51,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="1.0.0",
+    version="2.7.0-live-ai",
     lifespan=lifespan,
 )
 
@@ -407,6 +409,8 @@ async def dashboard() -> str:
 async def health() -> dict[str, Any]:
     return {
         "status": "ok",
+        "code_version": CODE_VERSION,
+        "autonomous_enabled": AUTONOMOUS_ENABLED,
         "live_trading": settings.live_trading,
         "paused": settings.paused,
         "kraken_configured": kraken_client.configured,
