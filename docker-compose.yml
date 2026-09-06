@@ -1,0 +1,40 @@
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kraken-live-bot:local
+    env_file:
+      - .env
+    environment:
+      LIVE_TRADING: "false"
+      ML_ENABLED: "false"
+      ML_PAPER_MODE: "true"
+      ML_KILL_SWITCH: "false"
+      ML_MODEL_PATH: /var/lib/kraken-bot/models/ml_model.joblib
+    ports:
+      - "8000:8000"
+    volumes:
+      - bot_logs:/var/lib/kraken-bot/logs
+      - bot_models:/var/lib/kraken-bot/models
+      - bot_data:/var/lib/kraken-bot/data
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    healthcheck:
+      test: ["CMD", "python", "/app/docker/healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  bot_logs:
+  bot_models:
+  bot_data:

@@ -2,3 +2,13 @@
 .env
 __pycache__/
 *.pyc
+
+# Runtime-only state; never commit secrets, datasets, or model artifacts.
+artifacts/
+logs/
+data/
+models/
+*.joblib
+*.pkl
+*.pickle
+*.csv

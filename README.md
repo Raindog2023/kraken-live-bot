@@ -24,3 +24,34 @@ ML training is offline only: normalize completed Kraken OHLCV candles, build cau
 - `LIVE_TRADING`, `PAUSED`
 
 Set `LIVE_TRADING=true` only after validating paper/shadow behavior and the offline backtest. The ML path requires a fresh serialized artifact and an `ohlcv` payload; otherwise the existing LLM/momentum path is used.
+
+## Docker deployment
+
+The image includes the complete application and ML source, but never includes secrets, datasets, logs, or model artifacts. The Compose service runs as a non-root user, restarts unless stopped, and mounts persistent named volumes at `/var/lib/kraken-bot/{logs,models,data}`.
+
+```bash
+cp .env.example .env
+# Edit .env locally; never commit it.
+docker compose build
+docker compose up -d
+
+docker compose logs -f bot
+docker compose stop
+docker compose down                 # removes containers, keeps named volumes
+docker compose run --rm bot health
+docker compose run --rm bot train /var/lib/kraken-bot/data/training.csv /var/lib/kraken-bot/models/ml_model.joblib
+docker compose run --rm bot backtest /var/lib/kraken-bot/data/backtest.csv
+```
+
+The container starts in paper/shadow mode by default (`LIVE_TRADING=false`, `ML_ENABLED=false`, `ML_PAPER_MODE=true`, `ML_KILL_SWITCH=false`). A compatible, fresh model artifact must exist in the models volume before enabling ML:
+
+```bash
+# First train and review the result/backtest; then set these in .env and recreate.
+docker compose run --rm bot train /var/lib/kraken-bot/data/training.csv /var/lib/kraken-bot/models/ml_model.joblib
+docker compose run --rm bot backtest /var/lib/kraken-bot/data/backtest.csv
+docker compose up -d --force-recreate
+```
+
+`train` expects CSV columns named after `app.ml.features.FEATURE_COLUMNS` plus `label` (values `-1`, `0`, or `1`). `backtest` expects `price` and `signal` columns. Training data and artifacts remain outside source control. The `/health` endpoint is used for the Docker healthcheck.
+
+For live trading, explicitly review limits, paper/shadow behavior, model freshness, API permissions, and exchange risk controls. Only then set `ML_ENABLED=true` and/or `LIVE_TRADING=true`; keep `ML_KILL_SWITCH=false` only when actively supervised. Docker Desktop/local Docker is not managed by this repository change.
