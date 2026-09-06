@@ -69,7 +69,7 @@ class KrakenClient:
 
         url_path = f"/0/private/{method}"
         body = dict(data or {})
-        body["nonce"] = str(int(time.time() * 1000))
+        body["nonce"] = str(int(time.time() * 1_000_000))
         headers = {
             "API-Key": settings.kraken_api_key.strip(),
             "API-Sign": self._sign(url_path, body),

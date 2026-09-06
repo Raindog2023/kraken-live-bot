@@ -17,13 +17,14 @@ from .godmod3_client import Godmod3Analysis, Godmod3Error, godmod3_client
 from .kraken_client import KrakenError, kraken_client, to_kraken_pair
 
 
-CODE_VERSION = "2.7.0-live-ai"
+CODE_VERSION = "2.7.1-live-ai"
 AUTONOMOUS_ENABLED = True
 AUTONOMOUS_PRODUCT_ID = "BTC-USD"
-AUTONOMOUS_QUOTE_AMOUNT = Decimal("50")
+AUTONOMOUS_QUOTE_AMOUNT = Decimal("25")
 AUTONOMOUS_MIN_CONFIDENCE = 50
 AUTONOMOUS_SCAN_SECONDS = 60
 AUTONOMOUS_TRADE_COOLDOWN_SECONDS = 180
+MIN_LIVE_QUOTE = Decimal("5")
 
 _scan_in_progress = False
 _last_trade_at: datetime | None = None
@@ -51,7 +52,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="2.7.0-live-ai",
+    version="2.7.1-live-ai",
     lifespan=lifespan,
 )
 
@@ -94,6 +95,15 @@ def decimal_from_value(
         return Decimal(str(value))
     except (InvalidOperation, ValueError, TypeError):
         return default
+
+
+def kraken_asset_balance(balances: dict[str, Any], *names: str) -> Decimal:
+    wanted = {name.upper() for name in names}
+    total = Decimal("0")
+    for key, value in balances.items():
+        if str(key).upper() in wanted:
+            total += decimal_from_value(value)
+    return total
 
 
 def floor_to_increment(value: Decimal, increment: Decimal) -> Decimal:
@@ -240,11 +250,45 @@ async def execute_auto_trade(
             "minimum_confidence": min_confidence,
         }
 
+    try:
+        balances = (kraken_client.get_account().get("balances") or {})
+    except KrakenError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Kraken balance error: {exc}",
+        ) from exc
+
+    usd = kraken_asset_balance(balances, "ZUSD", "USD", "USDT", "ZUSDT")
+    btc = kraken_asset_balance(balances, "XXBT", "XBT", "BTC")
+    price = decimal_from_value(market_data.get("product", {}).get("price"))
+    sized_quote = quote_amount
+
+    if analysis.action == "BUY":
+        affordable = floor_to_increment(usd * Decimal("0.96"), Decimal("0.01"))
+        sized_quote = min(quote_amount, affordable)
+        if sized_quote < MIN_LIVE_QUOTE:
+            return {
+                "status": "insufficient_funds",
+                **base_response,
+                "usd_balance": format(usd, "f"),
+                "needed": format(MIN_LIVE_QUOTE, "f"),
+            }
+    else:
+        sellable = floor_to_increment(btc * price * Decimal("0.98"), Decimal("0.01"))
+        sized_quote = min(quote_amount, sellable)
+        if sized_quote < MIN_LIVE_QUOTE:
+            return {
+                "status": "insufficient_position",
+                **base_response,
+                "btc_balance": format(btc, "f"),
+                "usd_value": format(sellable, "f"),
+            }
+
     signal = WebhookSignal(
         signal_id=f"KRAKEN-{uuid4()}",
         product_id=normalized,
         action=analysis.action,
-        quote_amount=quote_amount,
+        quote_amount=sized_quote,
         strategy="AUTO",
     )
     order = build_market_order(signal, market_data.get("product", {}))
