@@ -225,6 +225,20 @@ async def execute_auto_trade(
             detail=f"Kraken market data error: {exc}",
         ) from exc
 
+    # ML is opt-in and only overrides the LLM signal when a fresh, schema-valid
+    # artifact and completed OHLCV candles are supplied by the market client.
+    ml_analysis = None
+    if settings.ml_enabled and not settings.ml_kill_switch and market_data.get("ohlcv"):
+        try:
+            from .ml.features import normalize_completed_ohlcv, make_features
+            from .ml.model import load_artifact, predict
+            candles = normalize_completed_ohlcv(market_data["ohlcv"])
+            feature_rows = make_features(candles)
+            if feature_rows:
+                ml_analysis = predict(load_artifact(settings.ml_model_path), feature_rows[-1], threshold=settings.ml_confidence_threshold)
+        except (OSError, ValueError, KeyError, ImportError):
+            ml_analysis = None
+
     try:
         analysis = await godmod3_client.analyze(normalized, market_data)
     except Godmod3Error as exc:
@@ -239,6 +253,10 @@ async def execute_auto_trade(
         "order_ready": False,
         "submitted": False,
     }
+
+    if ml_analysis is not None and ml_analysis.signal != "HOLD":
+        base_response.update({"action": ml_analysis.signal, "confidence": round(ml_analysis.confidence * 100, 2), "strategy": "ML"})
+        analysis = analysis.model_copy(update={"action": ml_analysis.signal, "confidence": round(ml_analysis.confidence * 100, 2), "strategy": "ML"})
 
     if analysis.action == "HOLD":
         return {"status": "hold", **base_response}

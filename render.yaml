@@ -8,7 +8,13 @@ services:
       - key: PYTHON_VERSION
         value: "3.12.0"
       - key: LIVE_TRADING
+        value: "false"
+      - key: ML_ENABLED
+        value: "false"
+      - key: ML_PAPER_MODE
         value: "true"
+      - key: ML_KILL_SWITCH
+        value: "false"
       - key: PAUSED
         value: "false"
       - key: KRAKEN_BASE_URL

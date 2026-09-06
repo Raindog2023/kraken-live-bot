@@ -11,7 +11,15 @@ class Settings(BaseSettings):
     app_name: str = "kraken-live-bot"
     environment: str = "production"
 
-    live_trading: bool = True
+    live_trading: bool = False
+    ml_enabled: bool = False
+    ml_paper_mode: bool = True
+    ml_kill_switch: bool = False
+    ml_confidence_threshold: float = 0.60
+    ml_model_path: str = "artifacts/ml_model.joblib"
+    ml_max_order_quote: float = 25.0
+    ml_max_position_quote: float = 100.0
+    ml_daily_loss_limit: float = 25.0
     paused: bool = False
     webhook_secret: str = "CHANGE_ME"
 
