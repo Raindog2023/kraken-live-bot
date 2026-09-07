@@ -17,7 +17,7 @@ from .godmod3_client import Godmod3Analysis, Godmod3Error, godmod3_client
 from .kraken_client import KrakenError, kraken_client, to_kraken_pair
 
 
-CODE_VERSION = "2.7.1-live-ai"
+CODE_VERSION = "2.7.2-live-ai"
 AUTONOMOUS_ENABLED = True
 AUTONOMOUS_PRODUCT_ID = "BTC-USD"
 AUTONOMOUS_QUOTE_AMOUNT = Decimal("25")
@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="2.7.1-live-ai",
+    version="2.7.2-live-ai",
     lifespan=lifespan,
 )
 
@@ -456,7 +456,7 @@ async def root() -> dict[str, Any]:
     return {
         "app": settings.app_name,
         "status": "ok",
-        "version": "1.0.0",
+        "version": CODE_VERSION,
         "broker": "kraken",
         "dashboard": "/dashboard",
     }
@@ -469,6 +469,19 @@ async def dashboard() -> str:
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
+    kraken_private: dict[str, Any] = {"ok": False}
+    try:
+        balances = kraken_client.get_account().get("balances") or {}
+        usd = kraken_asset_balance(balances, "ZUSD", "USD", "USDT", "ZUSDT")
+        btc = kraken_asset_balance(balances, "XXBT", "XBT", "BTC")
+        kraken_private = {
+            "ok": True,
+            "usd": format(usd, "f"),
+            "btc": format(btc, "f"),
+        }
+    except KrakenError as exc:
+        kraken_private = {"ok": False, "error": str(exc)}
+
     return {
         "status": "ok",
         "code_version": CODE_VERSION,
@@ -476,6 +489,7 @@ async def health() -> dict[str, Any]:
         "live_trading": settings.live_trading,
         "paused": settings.paused,
         "kraken_configured": kraken_client.configured,
+        "kraken_private": kraken_private,
         "godmod3_configured": godmod3_client.configured,
         "analysis_providers": godmod3_client.available_providers(),
         "last_analysis_provider": godmod3_client.last_provider,
