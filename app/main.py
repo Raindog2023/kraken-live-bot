@@ -17,8 +17,8 @@ from .godmod3_client import Godmod3Analysis, Godmod3Error, godmod3_client
 from .kraken_client import KrakenError, kraken_client, to_kraken_pair
 
 
-CODE_VERSION = "2.7.2-live-ai"
-AUTONOMOUS_ENABLED = True
+CODE_VERSION = "2.7.3-halted"
+AUTONOMOUS_ENABLED = False
 AUTONOMOUS_PRODUCT_ID = "BTC-USD"
 AUTONOMOUS_QUOTE_AMOUNT = Decimal("25")
 AUTONOMOUS_MIN_CONFIDENCE = 50
@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="2.7.2-live-ai",
+    version="2.7.3-halted",
     lifespan=lifespan,
 )
 
