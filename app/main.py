@@ -17,7 +17,7 @@ from .godmod3_client import Godmod3Analysis, Godmod3Error, godmod3_client
 from .kraken_client import KrakenError, kraken_client, to_kraken_pair
 
 
-CODE_VERSION = "2.7.3-halted"
+CODE_VERSION = "2.7.4-halted"
 AUTONOMOUS_ENABLED = False
 AUTONOMOUS_PRODUCT_ID = "BTC-USD"
 AUTONOMOUS_QUOTE_AMOUNT = Decimal("25")
@@ -32,27 +32,34 @@ _last_scan_result: dict[str, Any] | None = None
 
 
 async def _autonomous_loop() -> None:
+    if not AUTONOMOUS_ENABLED:
+        return
     await run_autonomous_scan()
 
     while True:
         await asyncio.sleep(AUTONOMOUS_SCAN_SECONDS)
+        if not AUTONOMOUS_ENABLED or settings.paused or not settings.live_trading:
+            continue
         await run_autonomous_scan()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(_autonomous_loop())
+    task = None
+    if AUTONOMOUS_ENABLED:
+        task = asyncio.create_task(_autonomous_loop())
     try:
         yield
     finally:
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
 
 app = FastAPI(
     title=settings.app_name,
-    version="2.7.3-halted",
+    version="2.7.4-halted",
     lifespan=lifespan,
 )
 
@@ -339,6 +346,16 @@ async def execute_auto_trade(
 
 async def run_autonomous_scan() -> dict[str, Any]:
     global _scan_in_progress, _last_trade_at, _last_scan_result
+
+    if not AUTONOMOUS_ENABLED or settings.paused or not settings.live_trading:
+        result = {
+            "status": "skipped",
+            "reason": "halted",
+            "product_id": AUTONOMOUS_PRODUCT_ID,
+            "submitted": False,
+        }
+        _last_scan_result = result
+        return result
 
     if _scan_in_progress:
         result = {
