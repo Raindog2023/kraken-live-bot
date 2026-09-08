@@ -34,17 +34,34 @@ class KrakenClient:
 
     @property
     def configured(self) -> bool:
-        return bool(settings.kraken_api_key and settings.kraken_api_secret)
+        return bool(self._api_key and self._api_secret_raw)
 
     @property
     def base_url(self) -> str:
-        return settings.kraken_base_url.rstrip("/")
+        return (settings.kraken_base_url or "https://api.kraken.com").strip().rstrip("/")
+
+    @property
+    def _api_key(self) -> str:
+        return (settings.kraken_api_key or "").strip()
+
+    @property
+    def _api_secret_raw(self) -> str:
+        return (
+            (settings.kraken_api_secret or "")
+            .strip()
+            .replace("\n", "")
+            .replace("\r", "")
+            .replace(" ", "")
+        )
 
     def _sign(self, url_path: str, data: dict[str, Any]) -> str:
         postdata = urllib.parse.urlencode(data)
         encoded = (str(data["nonce"]) + postdata).encode()
         message = url_path.encode() + hashlib.sha256(encoded).digest()
-        secret = base64.b64decode(settings.kraken_api_secret)
+        try:
+            secret = base64.b64decode(self._api_secret_raw)
+        except Exception as exc:
+            raise KrakenError("Kraken API secret is not valid base64") from exc
         signature = hmac.new(secret, message, hashlib.sha512)
         return base64.b64encode(signature.digest()).decode()
 
@@ -71,7 +88,7 @@ class KrakenClient:
         body = dict(data or {})
         body["nonce"] = str(int(time.time() * 1_000_000))
         headers = {
-            "API-Key": settings.kraken_api_key.strip(),
+            "API-Key": self._api_key,
             "API-Sign": self._sign(url_path, body),
             "Content-Type": "application/x-www-form-urlencoded",
         }
@@ -172,14 +189,21 @@ class KrakenClient:
         volume_in_quote: bool = False,
         userref: str | None = None,
     ) -> dict[str, Any]:
+        # Kraken retired quote-volume market orders (oflags=viqc) on spot.
+        # Permission denied is the error it returns for that flag.
+        order_volume = volume
+        if volume_in_quote:
+            ticker = self.get_ticker(pair)
+            price = float(ticker["price"])
+            if price <= 0:
+                raise KrakenError("Kraken ticker price is invalid")
+            order_volume = f"{(float(volume) / price):.8f}"
         data: dict[str, Any] = {
             "pair": to_kraken_pair(pair),
             "type": side.lower(),
             "ordertype": "market",
-            "volume": volume,
+            "volume": order_volume,
         }
-        if volume_in_quote:
-            data["oflags"] = "viqc"
         if userref:
             data["userref"] = abs(hash(userref)) % 2_147_483_647
         result = self._private("AddOrder", data)
