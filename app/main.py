@@ -17,7 +17,7 @@ from .godmod3_client import Godmod3Analysis, Godmod3Error, godmod3_client
 from .kraken_client import KrakenError, kraken_client, to_kraken_pair
 
 
-CODE_VERSION = "2.7.1-live-ai"
+CODE_VERSION = "2.8.0-live-ai-fixed"
 AUTONOMOUS_ENABLED = True
 AUTONOMOUS_PRODUCT_ID = "BTC-USD"
 AUTONOMOUS_QUOTE_AMOUNT = Decimal("25")
@@ -28,7 +28,7 @@ MIN_LIVE_QUOTE = Decimal("5")
 
 _scan_in_progress = False
 _last_trade_at: datetime | None = None
-_last_scan_result: dict[str, Any] | None = None
+_last_scan_result: dict[str, Any] | None = {"status": "initializing", "reason": "awaiting_first_scan", "product_id": "BTC-USD", "submitted": False}
 
 
 async def _autonomous_loop() -> None:
@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="2.7.1-live-ai",
+    version="2.8.0-live-ai-fixed",
     lifespan=lifespan,
 )
 
@@ -545,3 +545,6 @@ async def auto_trade(
 ) -> dict[str, Any]:
     require_webhook_secret(x_webhook_secret)
     return await execute_auto_trade(product_id, quote_amount, min_confidence)
+
+
+
