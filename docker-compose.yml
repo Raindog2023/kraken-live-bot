@@ -1,17 +1,30 @@
+version: '3.9'
+
 services:
   bot:
     build:
       context: .
       dockerfile: Dockerfile
     image: kraken-live-bot:local
-    env_file:
-      - .env
+    # Load secrets from Docker Secret or .env file
     environment:
       LIVE_TRADING: "${LIVE_TRADING:-false}"
       ML_ENABLED: "${ML_ENABLED:-false}"
       ML_PAPER_MODE: "${ML_PAPER_MODE:-true}"
       ML_KILL_SWITCH: "${ML_KILL_SWITCH:-false}"
+      ENVIRONMENT: "${ENVIRONMENT:-production}"
+      KRAKEN_PAIR: "${KRAKEN_PAIR:-XBTUSD}"
+      PAUSED: "${PAUSED:-false}"
+      ML_CONFIDENCE_THRESHOLD: "${ML_CONFIDENCE_THRESHOLD:-0.60}"
+      ML_MAX_ORDER_QUOTE: "${ML_MAX_ORDER_QUOTE:-25}"
+      ML_MAX_POSITION_QUOTE: "${ML_MAX_POSITION_QUOTE:-100}"
+      ML_DAILY_LOSS_LIMIT: "${ML_DAILY_LOSS_LIMIT:-25}"
       ML_MODEL_PATH: "${ML_MODEL_PATH:-/var/lib/kraken-bot/models/ml_model.joblib}"
+      LOG_DIR: "${LOG_DIR:-/var/lib/kraken-bot/logs}"
+      MODEL_DIR: "${MODEL_DIR:-/var/lib/kraken-bot/models}"
+      DATA_DIR: "${DATA_DIR:-/var/lib/kraken-bot/data}"
+    env_file:
+      - .env
     ports:
       - "${PORT:-8000}:8000"
     volumes:
@@ -33,8 +46,28 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+    # Uncomment below for Docker Swarm / secrets mode:
+    # secrets:
+    #   - kraken_api_key
+    #   - kraken_api_secret
+    #   - anthropic_api_key
+    #   - webhook_secret
 
 volumes:
   bot_logs:
+    driver: local
   bot_models:
+    driver: local
   bot_data:
+    driver: local
+
+# Uncomment for Docker Swarm / secrets mode:
+# secrets:
+#   kraken_api_key:
+#     external: true
+#   kraken_api_secret:
+#     external: true
+#   anthropic_api_key:
+#     external: true
+#   webhook_secret:
+#     external: true
