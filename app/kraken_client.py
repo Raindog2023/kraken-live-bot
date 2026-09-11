@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import time
@@ -134,7 +135,9 @@ class KrakenClient:
             "raw": first,
         }
 
-    def get_ohlc(self, pair: str, interval: int = 5) -> list[dict[str, Any]]:
+    def get_ohlc(
+        self, pair: str, interval: int = 5, limit: int = 60
+    ) -> list[dict[str, Any]]:
         kraken_pair = to_kraken_pair(pair)
         result = self._public(
             "OHLC",
@@ -149,7 +152,7 @@ class KrakenClient:
                 break
         candles: list[dict[str, Any]] = []
         if isinstance(series, list):
-            for row in series[-60:]:
+            for row in series[-limit:]:
                 if not isinstance(row, list) or len(row) < 7:
                     continue
                 candles.append(
@@ -163,6 +166,17 @@ class KrakenClient:
                     }
                 )
         return candles
+
+    def get_daily_closes(self, pair: str, count: int) -> list[float]:
+        """Daily closes for the trend regime filter."""
+        candles = self.get_ohlc(pair, interval=1440, limit=count)
+        closes: list[float] = []
+        for candle in candles:
+            try:
+                closes.append(float(candle["close"]))
+            except (TypeError, ValueError):
+                continue
+        return closes
 
     def get_market_snapshot(self, pair: str) -> dict[str, Any]:
         ticker = self.get_ticker(pair)
@@ -205,7 +219,7 @@ class KrakenClient:
             "volume": order_volume,
         }
         if userref:
-            data["userref"] = abs(hash(userref)) % 2_147_483_647
+            data["userref"] = binascii.crc32(userref.encode()) % 2_147_483_647
         result = self._private("AddOrder", data)
         if not isinstance(result, dict):
             raise KrakenError("Kraken AddOrder response was invalid")

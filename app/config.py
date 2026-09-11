@@ -54,5 +54,29 @@ class Settings(BaseSettings):
     max_order_quote: float = 100.0
     request_timeout_seconds: int = 10
 
+    autonomous_enabled: bool = False
+    autonomous_product_id: str = "BTC-USD"
+    autonomous_quote_amount: float = 25.0
+    autonomous_min_confidence: int = 70
+    autonomous_scan_seconds: int = 300
+    autonomous_trade_cooldown_seconds: int = 900
+
+    taker_fee_bps: float = 26.0
+    slippage_bps: float = 2.0
+    min_edge_multiple: float = 2.0
+    stop_loss_pct: float = 1.5
+    take_profit_pct: float = 3.0
+    daily_loss_limit: float = 25.0
+    trend_filter_enabled: bool = True
+    trend_filter_days: int = 100
+
+    # Scheduled accumulation: the one thing in scripts/portfolio_lab.py that
+    # made money out of sample was owning BTC, so buying it on a clock is the
+    # only mode here with evidence behind it. It never sells.
+    accumulate_enabled: bool = False
+    accumulate_product_id: str = "BTC-USD"
+    accumulate_quote_amount: float = 25.0
+    accumulate_interval_hours: float = 168.0
+
 
 settings = Settings()
