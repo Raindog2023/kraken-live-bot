@@ -64,6 +64,62 @@ def test_daily_loss_limit_blocks_scanning(monkeypatch, flat_market):
     assert result["reason"] == "daily_loss_limit"
 
 
+@pytest.fixture
+def rallying_market(monkeypatch):
+    """A move big enough to clear the cost hurdle, so only the trend gate is left."""
+    monkeypatch.setattr(
+        main.kraken_client,
+        "get_market_snapshot",
+        lambda pair: snapshot([100.0] * 55 + [101.0, 102.0, 103.0, 104.0, 105.0]),
+    )
+
+    async def analyze(product_id, market_data):
+        return Godmod3Analysis(
+            product_id=product_id,
+            action="BUY",
+            confidence=99,
+            rationale="breakout",
+        )
+
+    monkeypatch.setattr(main.godmod3_client, "analyze", analyze)
+
+
+def test_entry_is_blocked_below_the_long_trend(monkeypatch, rallying_market):
+    monkeypatch.setattr(
+        main.kraken_client,
+        "get_daily_closes",
+        lambda pair, count: [200.0] * (count - 1) + [105.0],
+    )
+    monkeypatch.setattr(
+        main.kraken_client,
+        "get_account",
+        lambda: pytest.fail("must not reach balances while the trend is down"),
+    )
+
+    result = asyncio.run(main.execute_auto_trade("BTC-USD", Decimal("25"), 50))
+
+    assert result["status"] == "downtrend"
+    assert result["submitted"] is False
+
+
+def test_entry_is_allowed_above_the_long_trend(monkeypatch, rallying_market):
+    monkeypatch.setattr(
+        main.kraken_client,
+        "get_daily_closes",
+        lambda pair, count: [50.0] * (count - 1) + [105.0],
+    )
+    monkeypatch.setattr(
+        main.kraken_client,
+        "get_account",
+        lambda: {"balances": {"ZUSD": "1000", "XXBT": "1"}},
+    )
+
+    result = asyncio.run(main.execute_auto_trade("BTC-USD", Decimal("25"), 50))
+
+    assert result["status"] != "downtrend"
+    assert result["action"] == "BUY"
+
+
 def test_stop_loss_exits_without_calling_the_analyzer(monkeypatch):
     monkeypatch.setattr(
         main.kraken_client,

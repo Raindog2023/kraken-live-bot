@@ -51,6 +51,21 @@ def cost_aware_action(score_pct: float, costs: CostModel) -> Decision:
     )
 
 
+def trend_is_up(daily_closes: list[float], period: int) -> bool | None:
+    """Is the last close above its ``period``-day simple moving average?
+
+    Of everything measured in ``scripts/strategy_lab.py``, this is the only
+    effect that survived every out-of-sample window: a long-horizon trend
+    filter roughly halves drawdown. It does not create an edge, so it gates
+    entries only — exits must never wait for it.
+
+    Returns None when there is not enough history to judge.
+    """
+    if period <= 0 or len(daily_closes) < period:
+        return None
+    return daily_closes[-1] > sum(daily_closes[-period:]) / period
+
+
 @dataclass
 class Position:
     entry_price: Decimal

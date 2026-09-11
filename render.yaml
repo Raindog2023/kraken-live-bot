@@ -19,6 +19,10 @@ services:
         value: "3.0"
       - key: DAILY_LOSS_LIMIT
         value: "25"
+      - key: TREND_FILTER_ENABLED
+        value: "true"
+      - key: TREND_FILTER_DAYS
+        value: "100"
       - key: ML_ENABLED
         value: "false"
       - key: ML_PAPER_MODE

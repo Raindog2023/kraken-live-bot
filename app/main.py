@@ -4,7 +4,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation, ROUND_DOWN
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from hmac import compare_digest
 from typing import Any, Literal
 from uuid import uuid4
@@ -21,10 +21,15 @@ from .godmod3_client import (
     summarize_candles,
 )
 from .kraken_client import KrakenError, kraken_client, to_kraken_pair
-from .strategy import CostModel, RiskState, cost_aware_action, momentum_score
+from .strategy import (
+    CostModel,
+    RiskState,
+    cost_aware_action,
+    momentum_score,
+    trend_is_up,
+)
 
-
-CODE_VERSION = "2.9.0-cost-aware"
+CODE_VERSION = "2.10.0-trend-gated"
 AUTONOMOUS_PRODUCT_ID = settings.autonomous_product_id
 AUTONOMOUS_QUOTE_AMOUNT = Decimal(str(settings.autonomous_quote_amount))
 AUTONOMOUS_MIN_CONFIDENCE = settings.autonomous_min_confidence
@@ -356,6 +361,29 @@ async def execute_auto_trade(
                 "gate": gate_reason,
             }
 
+    if (
+        analysis.action == "BUY"
+        and forced_exit is None
+        and settings.trend_filter_enabled
+    ):
+        try:
+            closes = kraken_client.get_daily_closes(
+                normalized, settings.trend_filter_days
+            )
+        except KrakenError:
+            closes = []
+        uptrend = trend_is_up(closes, settings.trend_filter_days)
+        if uptrend is False:
+            return {
+                "status": "downtrend",
+                **base_response,
+                "trend_filter_days": settings.trend_filter_days,
+                "gate": (
+                    f"price below its {settings.trend_filter_days}-day average; "
+                    "entries are blocked while the trend is down"
+                ),
+            }
+
     try:
         balances = (kraken_client.get_account().get("balances") or {})
     except KrakenError as exc:
@@ -595,6 +623,9 @@ async def health() -> dict[str, Any]:
             "min_confidence": AUTONOMOUS_MIN_CONFIDENCE,
             "trade_cooldown_seconds": AUTONOMOUS_TRADE_COOLDOWN_SECONDS,
             "required_edge_pct": round(costs.required_edge_pct, 4),
+            "trend_filter_days": (
+                settings.trend_filter_days if settings.trend_filter_enabled else None
+            ),
             "risk": risk.snapshot(),
             "scan_in_progress": _scan_in_progress,
             "last_trade_at": (

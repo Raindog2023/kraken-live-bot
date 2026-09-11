@@ -2,7 +2,13 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from app.godmod3_client import local_momentum_analysis
-from app.strategy import CostModel, RiskState, cost_aware_action, momentum_score
+from app.strategy import (
+    CostModel,
+    RiskState,
+    cost_aware_action,
+    momentum_score,
+    trend_is_up,
+)
 
 COSTS = CostModel(fee_bps=26.0, slippage_bps=2.0, min_edge_multiple=2.0)
 
@@ -79,6 +85,12 @@ def test_daily_loss_limit_halts_and_resets_next_day():
     assert realized == Decimal("-30")
     assert state.halted(now)
     assert not state.halted(now + timedelta(days=1))
+
+
+def test_trend_filter_needs_a_full_lookback_before_it_judges():
+    assert trend_is_up([100.0] * 49, 50) is None
+    assert trend_is_up([100.0] * 49 + [200.0], 50) is True
+    assert trend_is_up([100.0] * 49 + [50.0], 50) is False
 
 
 def test_closing_without_a_position_is_a_noop():

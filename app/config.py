@@ -67,6 +67,8 @@ class Settings(BaseSettings):
     stop_loss_pct: float = 1.5
     take_profit_pct: float = 3.0
     daily_loss_limit: float = 25.0
+    trend_filter_enabled: bool = True
+    trend_filter_days: int = 100
 
 
 settings = Settings()

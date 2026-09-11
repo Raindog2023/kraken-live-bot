@@ -25,6 +25,38 @@ Rerun the sweep before enabling `AUTONOMOUS_ENABLED` or `LIVE_TRADING`. If the
 strategy does not beat buy & hold net of fees in the backtest, it will not beat
 it live.
 
+## Does *any* signal work? (`scripts/strategy_lab.py`)
+
+Before trusting a replacement signal, it has to survive data it was not fitted
+on. `scripts/strategy_lab.py` pulls multi-year Coinbase candles, fits ~230
+long/flat parameter sets across six classic families (MA cross, trend filter,
+Donchian breakout, time-series momentum, RSI reversion, dip-buying in an
+uptrend) on the first 70% of history and scores them on the rest.
+
+```bash
+python -m scripts.strategy_lab                                    # hourly, train/test split
+python -m scripts.strategy_lab --granularity 86400 --walk-forward # daily, rolling refit
+```
+
+Results on BTC-USD (26 bps fee + 2 bps slippage per side):
+
+- **No family beat buy & hold out of sample.** Walk-forward over 3 years,
+  refitting every 90 days on the trailing year, compounded to **+57% versus
+  +140% for holding**.
+- **Fees are not the whole story.** Rerunning the same walk-forward at *zero*
+  cost still returns +66% versus +148% — these signals have no predictive edge
+  to spend on fees in the first place.
+- **One effect did survive every window:** a long-horizon trend filter roughly
+  halves drawdown (e.g. -28% versus -53% on daily bars). It buys protection,
+  not profit.
+
+That last point is the only research result wired into the live path, as
+`TREND_FILTER_DAYS`: entries are blocked while price is below its N-day
+average. Exits are never gated on it.
+
+Treat this lab as the bar for any new idea. Anything that only looks good in
+sample is noise.
+
 ## Safe defaults
 - `AUTONOMOUS_ENABLED=false`
 - `ML_ENABLED=false`
@@ -46,6 +78,8 @@ ML training is offline only: normalize completed Kraken OHLCV candles, build cau
   whatever the LLM or ML model says
 - `STOP_LOSS_PCT`, `TAKE_PROFIT_PCT`: protective exits bypass analysis entirely
 - `DAILY_LOSS_LIMIT`: realized losses past this halt trading until UTC midnight
+- `TREND_FILTER_ENABLED`, `TREND_FILTER_DAYS`: block entries while price is
+  below its N-day average; protective exits ignore this filter
 - `ML_ENABLED`, `ML_PAPER_MODE`, `ML_KILL_SWITCH`
 - `ML_MODEL_PATH`, `ML_CONFIDENCE_THRESHOLD`
 - `ML_MAX_ORDER_QUOTE`, `ML_MAX_POSITION_QUOTE`, `ML_DAILY_LOSS_LIMIT`
