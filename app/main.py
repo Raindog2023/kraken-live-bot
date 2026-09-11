@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
@@ -13,46 +14,72 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from .config import settings
-from .godmod3_client import Godmod3Analysis, Godmod3Error, godmod3_client
+from .godmod3_client import (
+    Godmod3Analysis,
+    Godmod3Error,
+    godmod3_client,
+    summarize_candles,
+)
 from .kraken_client import KrakenError, kraken_client, to_kraken_pair
+from .strategy import CostModel, RiskState, cost_aware_action, momentum_score
 
 
-CODE_VERSION = "2.8.0-live-ai-fixed"
-AUTONOMOUS_ENABLED = True
-AUTONOMOUS_PRODUCT_ID = "BTC-USD"
-AUTONOMOUS_QUOTE_AMOUNT = Decimal("25")
-AUTONOMOUS_MIN_CONFIDENCE = 50
-AUTONOMOUS_SCAN_SECONDS = 60
-AUTONOMOUS_TRADE_COOLDOWN_SECONDS = 180
+CODE_VERSION = "2.9.0-cost-aware"
+AUTONOMOUS_PRODUCT_ID = settings.autonomous_product_id
+AUTONOMOUS_QUOTE_AMOUNT = Decimal(str(settings.autonomous_quote_amount))
+AUTONOMOUS_MIN_CONFIDENCE = settings.autonomous_min_confidence
+AUTONOMOUS_SCAN_SECONDS = settings.autonomous_scan_seconds
+AUTONOMOUS_TRADE_COOLDOWN_SECONDS = settings.autonomous_trade_cooldown_seconds
 MIN_LIVE_QUOTE = Decimal("5")
+
+logger = logging.getLogger(__name__)
+
+costs = CostModel(
+    fee_bps=settings.taker_fee_bps,
+    slippage_bps=settings.slippage_bps,
+    min_edge_multiple=settings.min_edge_multiple,
+)
+risk = RiskState(
+    daily_loss_limit=Decimal(str(settings.daily_loss_limit)),
+    stop_loss_pct=settings.stop_loss_pct,
+    take_profit_pct=settings.take_profit_pct,
+)
 
 _scan_in_progress = False
 _last_trade_at: datetime | None = None
-_last_scan_result: dict[str, Any] | None = {"status": "initializing", "reason": "awaiting_first_scan", "product_id": "BTC-USD", "submitted": False}
+_last_scan_result: dict[str, Any] | None = {
+    "status": "initializing",
+    "reason": "awaiting_first_scan",
+    "product_id": AUTONOMOUS_PRODUCT_ID,
+    "submitted": False,
+}
 
 
 async def _autonomous_loop() -> None:
-    await run_autonomous_scan()
-
     while True:
-        await asyncio.sleep(AUTONOMOUS_SCAN_SECONDS)
         await run_autonomous_scan()
+        await asyncio.sleep(AUTONOMOUS_SCAN_SECONDS)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(_autonomous_loop())
+    task: asyncio.Task[None] | None = None
+    if settings.autonomous_enabled:
+        task = asyncio.create_task(_autonomous_loop())
+    else:
+        logger.info("autonomous scanning disabled (AUTONOMOUS_ENABLED=false)")
     try:
         yield
     finally:
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
 
 app = FastAPI(
     title=settings.app_name,
-    version="2.8.0-live-ai-fixed",
+    version=CODE_VERSION,
     lifespan=lifespan,
 )
 
@@ -225,24 +252,76 @@ async def execute_auto_trade(
             detail=f"Kraken market data error: {exc}",
         ) from exc
 
-    # ML is opt-in and only overrides the LLM signal when a fresh, schema-valid
-    # artifact and completed OHLCV candles are supplied by the market client.
-    ml_analysis = None
-    if settings.ml_enabled and not settings.ml_kill_switch and market_data.get("ohlcv"):
-        try:
-            from .ml.features import normalize_completed_ohlcv, make_features
-            from .ml.model import load_artifact, predict
-            candles = normalize_completed_ohlcv(market_data["ohlcv"])
-            feature_rows = make_features(candles)
-            if feature_rows:
-                ml_analysis = predict(load_artifact(settings.ml_model_path), feature_rows[-1], threshold=settings.ml_confidence_threshold)
-        except (OSError, ValueError, KeyError, ImportError):
-            ml_analysis = None
+    now = datetime.now(timezone.utc)
+    price = decimal_from_value(market_data.get("product", {}).get("price"))
+    candles = market_data.get("candles") or []
 
-    try:
-        analysis = await godmod3_client.analyze(normalized, market_data)
-    except Godmod3Error as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if risk.halted(now):
+        return {
+            "status": "halted",
+            "reason": "daily_loss_limit",
+            "product_id": normalized,
+            "pair": to_kraken_pair(normalized),
+            "submitted": False,
+            "risk": risk.snapshot(now),
+        }
+
+    # A protective exit skips analysis entirely: the position, not the signal,
+    # decides.
+    forced_exit = risk.exit_reason(price) if price > 0 else None
+
+    if forced_exit is not None:
+        analysis = Godmod3Analysis(
+            product_id=normalized,
+            action="SELL",
+            confidence=100,
+            rationale=f"Protective exit: {forced_exit}.",
+        )
+    else:
+        # ML is opt-in and only overrides the LLM signal when a fresh,
+        # schema-valid artifact and completed candles are available.
+        ml_analysis = None
+        if settings.ml_enabled and not settings.ml_kill_switch and candles:
+            try:
+                from .ml.features import make_features, normalize_completed_ohlcv
+                from .ml.model import load_artifact, predict
+
+                normalized_candles = normalize_completed_ohlcv(
+                    [
+                        [
+                            candle["start"],
+                            candle["open"],
+                            candle["high"],
+                            candle["low"],
+                            candle["close"],
+                            candle["close"],
+                            candle["volume"],
+                        ]
+                        for candle in candles
+                    ]
+                )
+                feature_rows = make_features(normalized_candles)
+                if feature_rows:
+                    ml_analysis = predict(
+                        load_artifact(settings.ml_model_path),
+                        feature_rows[-1],
+                        threshold=settings.ml_confidence_threshold,
+                    )
+            except (OSError, ValueError, KeyError, TypeError, ImportError):
+                ml_analysis = None
+
+        try:
+            analysis = await godmod3_client.analyze(normalized, market_data)
+        except Godmod3Error as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        if ml_analysis is not None and ml_analysis.signal != "HOLD":
+            analysis = analysis.model_copy(
+                update={
+                    "action": ml_analysis.signal,
+                    "confidence": round(ml_analysis.confidence * 100),
+                }
+            )
 
     base_response: dict[str, Any] = {
         "product_id": normalized,
@@ -252,11 +331,8 @@ async def execute_auto_trade(
         "rationale": analysis.rationale,
         "order_ready": False,
         "submitted": False,
+        "risk": risk.snapshot(now),
     }
-
-    if ml_analysis is not None and ml_analysis.signal != "HOLD":
-        base_response.update({"action": ml_analysis.signal, "confidence": round(ml_analysis.confidence * 100, 2), "strategy": "ML"})
-        analysis = analysis.model_copy(update={"action": ml_analysis.signal, "confidence": round(ml_analysis.confidence * 100, 2), "strategy": "ML"})
 
     if analysis.action == "HOLD":
         return {"status": "hold", **base_response}
@@ -268,6 +344,18 @@ async def execute_auto_trade(
             "minimum_confidence": min_confidence,
         }
 
+    if forced_exit is None:
+        score = momentum_score(summarize_candles(candles))
+        gated_action, gate_reason = cost_aware_action(score, costs)
+        if gated_action != analysis.action:
+            return {
+                "status": "below_cost_hurdle",
+                **base_response,
+                "momentum_score_pct": round(score, 4),
+                "required_edge_pct": round(costs.required_edge_pct, 4),
+                "gate": gate_reason,
+            }
+
     try:
         balances = (kraken_client.get_account().get("balances") or {})
     except KrakenError as exc:
@@ -278,7 +366,6 @@ async def execute_auto_trade(
 
     usd = kraken_asset_balance(balances, "ZUSD", "USD", "USDT", "ZUSDT")
     btc = kraken_asset_balance(balances, "XXBT", "XBT", "BTC")
-    price = decimal_from_value(market_data.get("product", {}).get("price"))
     sized_quote = quote_amount
 
     if analysis.action == "BUY":
@@ -328,12 +415,20 @@ async def execute_auto_trade(
         }
 
     result = submit_kraken_order(order)
+
+    if analysis.action == "BUY":
+        risk.open_position(price, sized_quote, now)
+    else:
+        risk.close_position(price, now)
+
     return {
         "status": "submitted",
         **ready_response,
         "submitted": True,
         "live_trading": True,
         "kraken_response": result,
+        "risk": risk.snapshot(now),
+        "exit_reason": forced_exit,
     }
 
 
@@ -344,6 +439,16 @@ async def run_autonomous_scan() -> dict[str, Any]:
         result = {
             "status": "skipped",
             "reason": "scan_in_progress",
+            "product_id": AUTONOMOUS_PRODUCT_ID,
+            "submitted": False,
+        }
+        _last_scan_result = result
+        return result
+
+    if settings.paused or not godmod3_client.configured:
+        result = {
+            "status": "skipped",
+            "reason": "paused" if settings.paused else "analyzer_unconfigured",
             "product_id": AUTONOMOUS_PRODUCT_ID,
             "submitted": False,
         }
@@ -388,6 +493,7 @@ async def run_autonomous_scan() -> dict[str, Any]:
             "detail": exc.detail,
             "status_code": exc.status_code,
         }
+        logger.warning("autonomous scan http error: %s", exc.detail)
         _last_scan_result = result
         return result
     except Exception as exc:
@@ -398,6 +504,7 @@ async def run_autonomous_scan() -> dict[str, Any]:
             "submitted": False,
             "detail": str(exc),
         }
+        logger.exception("autonomous scan failed")
         _last_scan_result = result
         return result
     finally:
@@ -427,21 +534,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <p class="muted">XBTUSD autonomous scanner. Portfolio lives in Kraken.</p>
     <div class="grid" id="stats"></div>
     <div class="card">
-      <h3>Account / last scan</h3>
+      <h3>Risk state / last scan</h3>
       <pre id="scan">loading...</pre>
     </div>
   </main>
   <script>
     async function load() {
       const health = await fetch('/health').then(r => r.json());
-      const account = await fetch('/kraken/account').then(r => r.json()).catch(() => ({error: 'unavailable'}));
       document.getElementById('stats').innerHTML = `
         <div class="card"><div class="muted">Paused</div><div class="${health.paused?'bad':'ok'}">${health.paused}</div></div>
         <div class="card"><div class="muted">Live trading</div><div class="${health.live_trading?'ok':'bad'}">${health.live_trading}</div></div>
+        <div class="card"><div class="muted">Autonomous</div><div>${health.autonomous_enabled}</div></div>
+        <div class="card"><div class="muted">Edge hurdle</div><div>${health.autonomous.required_edge_pct}%</div></div>
         <div class="card"><div class="muted">Kraken</div><div>${health.kraken_configured}</div></div>
         <div class="card"><div class="muted">Analyzer</div><div>${(health.analysis_providers||[]).join(', ')||health.godmod3_configured}</div></div>
       `;
-      document.getElementById('scan').textContent = JSON.stringify({health: health.autonomous, account}, null, 2);
+      document.getElementById('scan').textContent = JSON.stringify(health.autonomous, null, 2);
     }
     load();
     setInterval(load, 15000);
@@ -456,7 +564,7 @@ async def root() -> dict[str, Any]:
     return {
         "app": settings.app_name,
         "status": "ok",
-        "version": "1.0.0",
+        "version": CODE_VERSION,
         "broker": "kraken",
         "dashboard": "/dashboard",
     }
@@ -472,7 +580,7 @@ async def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "code_version": CODE_VERSION,
-        "autonomous_enabled": AUTONOMOUS_ENABLED,
+        "autonomous_enabled": settings.autonomous_enabled,
         "live_trading": settings.live_trading,
         "paused": settings.paused,
         "kraken_configured": kraken_client.configured,
@@ -486,6 +594,8 @@ async def health() -> dict[str, Any]:
             "quote_amount": str(AUTONOMOUS_QUOTE_AMOUNT),
             "min_confidence": AUTONOMOUS_MIN_CONFIDENCE,
             "trade_cooldown_seconds": AUTONOMOUS_TRADE_COOLDOWN_SECONDS,
+            "required_edge_pct": round(costs.required_edge_pct, 4),
+            "risk": risk.snapshot(),
             "scan_in_progress": _scan_in_progress,
             "last_trade_at": (
                 _last_trade_at.isoformat()
@@ -510,7 +620,13 @@ async def godmod3_health() -> dict[str, Any]:
 
 
 @app.get("/kraken/account")
-async def kraken_account() -> dict[str, Any]:
+async def kraken_account(
+    x_webhook_secret: str | None = Header(
+        default=None,
+        alias="X-Webhook-Secret",
+    ),
+) -> dict[str, Any]:
+    require_webhook_secret(x_webhook_secret)
     try:
         return kraken_client.get_account()
     except KrakenError as exc:
@@ -518,7 +634,14 @@ async def kraken_account() -> dict[str, Any]:
 
 
 @app.post("/analyze/{product_id}", response_model=Godmod3Analysis)
-async def analyze_product(product_id: str) -> Godmod3Analysis:
+async def analyze_product(
+    product_id: str,
+    x_webhook_secret: str | None = Header(
+        default=None,
+        alias="X-Webhook-Secret",
+    ),
+) -> Godmod3Analysis:
+    require_webhook_secret(x_webhook_secret)
     normalized = normalize_product_id(product_id)
     try:
         market_data = kraken_client.get_market_snapshot(normalized)

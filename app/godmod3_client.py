@@ -8,6 +8,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .config import settings
+from .strategy import CostModel, cost_aware_action, momentum_score
 
 
 class Godmod3Error(RuntimeError):
@@ -102,50 +103,30 @@ def local_momentum_analysis(
     if not isinstance(candles, list):
         candles = []
     summary = summarize_candles(candles)
-    change_5m = summary.get("change_5m_percent") or 0.0
-    change_15m = summary.get("change_15m_percent") or 0.0
-    change_1h = summary.get("change_1h_percent") or 0.0
-    change_window = summary.get("change_full_window_percent") or 0.0
     try:
         change_24h = float(product.get("price_percentage_change_24h") or 0)
     except (TypeError, ValueError):
         change_24h = 0.0
 
-    score = (
-        (change_5m * 2.0)
-        + (change_15m * 1.5)
-        + change_1h
-        + (change_window * 0.25)
-        + (change_24h * 0.35)
+    costs = CostModel(
+        fee_bps=settings.taker_fee_bps,
+        slippage_bps=settings.slippage_bps,
+        min_edge_multiple=settings.min_edge_multiple,
     )
-    if score >= 0.02:
-        action = "BUY"
-        confidence = min(90, 68 + int(abs(score) * 20))
-        rationale = (
-            "Local momentum fallback BUY: "
-            f"5m={change_5m:.4f}%, 15m={change_15m:.4f}%, "
-            f"1h={change_1h:.4f}%, 24h={change_24h:.4f}%."
-        )
-    elif score <= -0.02:
-        action = "SELL"
-        confidence = min(90, 68 + int(abs(score) * 20))
-        rationale = (
-            "Local momentum fallback SELL: "
-            f"5m={change_5m:.4f}%, 15m={change_15m:.4f}%, "
-            f"1h={change_1h:.4f}%, 24h={change_24h:.4f}%."
-        )
-    else:
-        action = "HOLD"
+    score = momentum_score(summary, change_24h)
+    action, reason = cost_aware_action(score, costs)
+    if action == "HOLD":
         confidence = 55
-        rationale = (
-            "Local momentum fallback HOLD: no usable directional bias "
-            f"(score={score:.4f})."
+    else:
+        confidence = min(
+            90,
+            60 + int(abs(score) / max(costs.required_edge_pct, 1e-9) * 10),
         )
     return Godmod3Analysis(
         product_id=product_id,
         action=action,
         confidence=confidence,
-        rationale=rationale,
+        rationale=f"Local momentum {action}: {reason}.",
     )
 
 
@@ -227,10 +208,11 @@ SYSTEM_PROMPT = (
     "Base your decision ONLY on the market data supplied in the user message. "
     "Never invent news, indicators, prices, volume, technical signals, or "
     "market conditions that were not provided. "
-    "Prefer BUY or SELL whenever short-term price has a directional bias. "
-    "Use BUY for positive 5m/15m/1h or 24h momentum. "
-    "Use SELL for negative 5m/15m/1h or 24h momentum. "
-    "Use HOLD only when every supplied change is essentially flat. "
+    "Every round trip costs roughly 0.5% in fees and slippage, so a trade is "
+    "only worth taking when the supplied momentum suggests a larger move. "
+    "Use BUY or SELL only for momentum that clears that cost. "
+    "Use HOLD whenever the supplied changes are flat, mixed, or smaller than "
+    "the cost of trading; HOLD is the correct default. "
     "Confidence represents how strongly the supplied market data supports "
     "the chosen action. Return exactly one JSON object containing "
     "product_id, action, confidence, and rationale. "
@@ -530,16 +512,6 @@ class MarketAnalyzer:
                 content = await caller(SYSTEM_PROMPT, user_prompt)
                 analysis = self._parse_analysis(product_id, content)
                 self.last_provider = name
-                if analysis.action in {"BUY", "SELL"} and analysis.confidence >= 50:
-                    return analysis
-                fallback = local_momentum_analysis(product_id, market_data)
-                if fallback.action != "HOLD":
-                    self.last_provider = f"{name}+local_momentum"
-                    fallback.rationale = (
-                        f"LLM returned {analysis.action} ({analysis.confidence}). "
-                        + fallback.rationale
-                    )
-                    return fallback
                 return analysis
             except (
                 Godmod3Error,

@@ -54,5 +54,19 @@ class Settings(BaseSettings):
     max_order_quote: float = 100.0
     request_timeout_seconds: int = 10
 
+    autonomous_enabled: bool = False
+    autonomous_product_id: str = "BTC-USD"
+    autonomous_quote_amount: float = 25.0
+    autonomous_min_confidence: int = 70
+    autonomous_scan_seconds: int = 300
+    autonomous_trade_cooldown_seconds: int = 900
+
+    taker_fee_bps: float = 26.0
+    slippage_bps: float = 2.0
+    min_edge_multiple: float = 2.0
+    stop_loss_pct: float = 1.5
+    take_profit_pct: float = 3.0
+    daily_loss_limit: float = 25.0
+
 
 settings = Settings()

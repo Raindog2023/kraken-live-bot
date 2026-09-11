@@ -4,7 +4,29 @@ Live XBTUSD scanner with an opt-in, leakage-safe ML signal path. The existing LL
 
 Dashboard: `/dashboard`
 
+`/kraken/account`, `/analyze/{product_id}` and `/auto/{product_id}` require the
+`X-Webhook-Secret` header.
+
+## Measured performance (why autonomous trading is off)
+
+`python -m scripts.strategy_backtest --interval 5 --sweep` replays the live
+signal logic on real Kraken OHLC data, charging 26 bps taker fee + 2 bps
+slippage per fill. On XBTUSD the momentum signal has no measurable edge; the
+only variable that improves results is trading less:
+
+| edge hurdle | trades (60h of 5m candles) | strategy | buy & hold |
+| --- | --- | --- | --- |
+| none (legacy behaviour) | 147 | -34.9% | -1.8% |
+| 1x round-trip cost | 39 | -11.5% | -1.8% |
+| 2x round-trip cost (default) | 13 | -5.7% | -1.8% |
+| 4x round-trip cost | 0 | 0.0% | -1.8% |
+
+Rerun the sweep before enabling `AUTONOMOUS_ENABLED` or `LIVE_TRADING`. If the
+strategy does not beat buy & hold net of fees in the backtest, it will not beat
+it live.
+
 ## Safe defaults
+- `AUTONOMOUS_ENABLED=false`
 - `ML_ENABLED=false`
 - `ML_PAPER_MODE=true`
 - `LIVE_TRADING=false`
@@ -18,12 +40,18 @@ ML training is offline only: normalize completed Kraken OHLCV candles, build cau
 - `WEBHOOK_SECRET`
 
 ## ML and trading guardrails
+- `AUTONOMOUS_ENABLED`, `AUTONOMOUS_SCAN_SECONDS`, `AUTONOMOUS_TRADE_COOLDOWN_SECONDS`
+- `TAKER_FEE_BPS`, `SLIPPAGE_BPS`, `MIN_EDGE_MULTIPLE`: a BUY/SELL is only sent
+  when momentum exceeds `MIN_EDGE_MULTIPLE` round trips of trading cost,
+  whatever the LLM or ML model says
+- `STOP_LOSS_PCT`, `TAKE_PROFIT_PCT`: protective exits bypass analysis entirely
+- `DAILY_LOSS_LIMIT`: realized losses past this halt trading until UTC midnight
 - `ML_ENABLED`, `ML_PAPER_MODE`, `ML_KILL_SWITCH`
 - `ML_MODEL_PATH`, `ML_CONFIDENCE_THRESHOLD`
 - `ML_MAX_ORDER_QUOTE`, `ML_MAX_POSITION_QUOTE`, `ML_DAILY_LOSS_LIMIT`
 - `LIVE_TRADING`, `PAUSED`
 
-Set `LIVE_TRADING=true` only after validating paper/shadow behavior and the offline backtest. The ML path requires a fresh serialized artifact and an `ohlcv` payload; otherwise the existing LLM/momentum path is used.
+Set `LIVE_TRADING=true` only after validating paper/shadow behavior and the offline backtest. The ML path requires a fresh serialized artifact and completed candles; otherwise the existing LLM/momentum path is used.
 
 ## Docker deployment
 

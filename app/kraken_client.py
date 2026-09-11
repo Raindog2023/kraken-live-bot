@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import time
@@ -205,7 +206,7 @@ class KrakenClient:
             "volume": order_volume,
         }
         if userref:
-            data["userref"] = abs(hash(userref)) % 2_147_483_647
+            data["userref"] = binascii.crc32(userref.encode()) % 2_147_483_647
         result = self._private("AddOrder", data)
         if not isinstance(result, dict):
             raise KrakenError("Kraken AddOrder response was invalid")

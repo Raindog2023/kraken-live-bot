@@ -9,6 +9,16 @@ services:
         value: "3.12.0"
       - key: LIVE_TRADING
         value: "false"
+      - key: AUTONOMOUS_ENABLED
+        value: "false"
+      - key: MIN_EDGE_MULTIPLE
+        value: "2.0"
+      - key: STOP_LOSS_PCT
+        value: "1.5"
+      - key: TAKE_PROFIT_PCT
+        value: "3.0"
+      - key: DAILY_LOSS_LIMIT
+        value: "25"
       - key: ML_ENABLED
         value: "false"
       - key: ML_PAPER_MODE
