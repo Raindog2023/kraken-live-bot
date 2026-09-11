@@ -27,6 +27,8 @@ Set `LIVE_TRADING=true` only after validating paper/shadow behavior and the offl
 
 ## Docker deployment
 
+The build stages use [Docker Hardened Images](https://docs.docker.com/dhi/) from `dhi.io`, which is an authenticated registry: run `docker login dhi.io` with your Docker Hub credentials before building, locally and in CI.
+
 The image includes the complete application and ML source, but never includes secrets, datasets, logs, or model artifacts. The Compose service runs as a non-root user, restarts unless stopped, and mounts persistent named volumes at `/var/lib/kraken-bot/{logs,models,data}`.
 
 ```bash
@@ -38,17 +40,24 @@ docker compose up -d
 docker compose logs -f bot
 docker compose stop
 docker compose down                 # removes containers, keeps named volumes
-docker compose run --rm bot health
-docker compose run --rm bot train /var/lib/kraken-bot/data/training.csv /var/lib/kraken-bot/models/ml_model.joblib
-docker compose run --rm bot backtest /var/lib/kraken-bot/data/backtest.csv
+docker compose exec bot python /app/docker/healthcheck.py
+```
+
+The runtime image starts uvicorn directly and contains no shell, so `train` and `backtest` run from the `-dev` build stage:
+
+```bash
+docker build --target preparer -t kraken-live-bot:dev .
+docker run --rm -v kraken-live-bot_bot_data:/var/lib/kraken-bot/data -v kraken-live-bot_bot_models:/var/lib/kraken-bot/models \
+  kraken-live-bot:dev /app/scripts/train.sh /var/lib/kraken-bot/data/training.csv /var/lib/kraken-bot/models/ml_model.joblib
+docker run --rm -v kraken-live-bot_bot_data:/var/lib/kraken-bot/data \
+  kraken-live-bot:dev /app/scripts/backtest.sh /var/lib/kraken-bot/data/backtest.csv
 ```
 
 The container starts in paper/shadow mode by default (`LIVE_TRADING=false`, `ML_ENABLED=false`, `ML_PAPER_MODE=true`, `ML_KILL_SWITCH=false`). A compatible, fresh model artifact must exist in the models volume before enabling ML:
 
 ```bash
-# First train and review the result/backtest; then set these in .env and recreate.
-docker compose run --rm bot train /var/lib/kraken-bot/data/training.csv /var/lib/kraken-bot/models/ml_model.joblib
-docker compose run --rm bot backtest /var/lib/kraken-bot/data/backtest.csv
+# First train and review the result/backtest with the commands above; then set
+# these in .env and recreate.
 docker compose up -d --force-recreate
 ```
 
