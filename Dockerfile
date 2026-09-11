@@ -20,6 +20,9 @@ RUN pip install --no-cache-dir -r requirements.txt --target /app/site-packages
 # Intermediate stage to prepare application files with permissions
 FROM dhi.io/python:3.11.16-debian13-dev AS preparer
 
+ENV PYTHONPATH=/app/site-packages \
+    PATH=/app/site-packages/bin:$PATH
+
 WORKDIR /app
 
 COPY --from=builder /app/site-packages /app/site-packages

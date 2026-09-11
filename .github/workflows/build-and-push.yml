@@ -1,0 +1,151 @@
+name: Build and Push
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - develop
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: kraken-live-bot
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: python -m pytest -q
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve build context
+        id: ctx
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+        run: |
+          if [ -n "$DOCKER_USERNAME" ]; then
+            echo "has_credentials=true" >> "$GITHUB_OUTPUT"
+            echo "image=${REGISTRY}/${DOCKER_USERNAME}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_credentials=false" >> "$GITHUB_OUTPUT"
+            echo "image=${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # dhi.io and Docker Hub both need DOCKER_USERNAME/DOCKER_PASSWORD. They are
+      # legitimately absent on fork pull requests; anywhere else it is a
+      # misconfiguration that would silently publish nothing.
+      - name: Report missing credentials
+        if: steps.ctx.outputs.has_credentials != 'true'
+        run: |
+          message="DOCKER_USERNAME/DOCKER_PASSWORD are unavailable, so the image cannot be built (the base images live in the authenticated dhi.io registry)."
+          if [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ]; then
+            echo "::warning::${message} Expected for a fork pull request."
+            exit 0
+          fi
+          echo "::error::${message} Set both secrets on the repository."
+          exit 1
+
+      - name: Set up Docker Buildx
+        if: steps.ctx.outputs.has_credentials == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      # The Dockerfile builds FROM dhi.io/python:*, which always requires a login,
+      # including for builds that never push.
+      - name: Log in to Docker Hardened Images
+        if: steps.ctx.outputs.has_credentials == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: dhi.io
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Log in to Docker Hub
+        if: steps.ctx.outputs.has_credentials == 'true' && github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Extract metadata
+        id: meta
+        if: steps.ctx.outputs.has_credentials == 'true'
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.ctx.outputs.image }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build image
+        if: steps.ctx.outputs.has_credentials == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:ci
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test image
+        if: steps.ctx.outputs.has_credentials == 'true'
+        run: |
+          set -euo pipefail
+          docker run -d --name kraken-live-bot-ci \
+            -e KRAKEN_API_KEY=test -e KRAKEN_API_SECRET=test \
+            -e ANTHROPIC_API_KEY=test -e WEBHOOK_SECRET=test \
+            "${IMAGE_NAME}:ci"
+          trap 'docker logs kraken-live-bot-ci || true; docker rm -f kraken-live-bot-ci || true' EXIT
+          for _ in $(seq 1 30); do
+            if docker exec kraken-live-bot-ci python /app/docker/healthcheck.py; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "container never became healthy" >&2
+          exit 1
+
+      - name: Push image
+        if: steps.ctx.outputs.has_credentials == 'true' && github.event_name != 'pull_request'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
