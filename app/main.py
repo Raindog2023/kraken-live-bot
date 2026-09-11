@@ -29,7 +29,7 @@ from .strategy import (
     trend_is_up,
 )
 
-CODE_VERSION = "2.10.0-trend-gated"
+CODE_VERSION = "2.11.0-accumulate"
 AUTONOMOUS_PRODUCT_ID = settings.autonomous_product_id
 AUTONOMOUS_QUOTE_AMOUNT = Decimal(str(settings.autonomous_quote_amount))
 AUTONOMOUS_MIN_CONFIDENCE = settings.autonomous_min_confidence
@@ -66,17 +66,29 @@ async def _autonomous_loop() -> None:
         await asyncio.sleep(AUTONOMOUS_SCAN_SECONDS)
 
 
+async def _accumulation_loop() -> None:
+    while True:
+        try:
+            result = await execute_accumulation()
+            logger.info("accumulation tick: %s", result.get("status"))
+        except HTTPException as exc:
+            logger.warning("accumulation tick failed: %s", exc.detail)
+        await asyncio.sleep(settings.accumulate_interval_hours * 3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task: asyncio.Task[None] | None = None
+    tasks: list[asyncio.Task[None]] = []
     if settings.autonomous_enabled:
-        task = asyncio.create_task(_autonomous_loop())
+        tasks.append(asyncio.create_task(_autonomous_loop()))
     else:
         logger.info("autonomous scanning disabled (AUTONOMOUS_ENABLED=false)")
+    if settings.accumulate_enabled:
+        tasks.append(asyncio.create_task(_accumulation_loop()))
     try:
         yield
     finally:
-        if task is not None:
+        for task in tasks:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
@@ -228,6 +240,87 @@ def submit_kraken_order(order: dict[str, Any]) -> dict[str, Any]:
             status_code=502,
             detail=f"Kraken order error: {exc}",
         ) from exc
+
+
+async def execute_accumulation(
+    product_id: str | None = None,
+    quote_amount: Decimal | None = None,
+) -> dict[str, Any]:
+    """Buy a fixed amount of spot on a schedule and never sell.
+
+    Deliberately signal-free. Across every out-of-sample test in
+    ``scripts/portfolio_lab.py`` the timing rules lost to simply owning the
+    asset, so this path spends no money on prediction: no LLM, no ML, no
+    momentum gate, no stop-loss. The only checks are funds and limits.
+    """
+    normalized = normalize_product_id(product_id or settings.accumulate_product_id)
+    amount = quote_amount or Decimal(str(settings.accumulate_quote_amount))
+
+    if amount <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="quote_amount must be greater than zero",
+        )
+
+    try:
+        market_data = kraken_client.get_market_snapshot(normalized)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Kraken market data error: {exc}",
+        ) from exc
+
+    base_response: dict[str, Any] = {
+        "product_id": normalized,
+        "pair": to_kraken_pair(normalized),
+        "action": "BUY",
+        "mode": "accumulate",
+        "submitted": False,
+    }
+
+    try:
+        balances = kraken_client.get_account().get("balances") or {}
+    except KrakenError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Kraken balance error: {exc}",
+        ) from exc
+
+    usd = kraken_asset_balance(balances, "ZUSD", "USD", "USDT", "ZUSDT")
+    affordable = floor_to_increment(usd * Decimal("0.96"), Decimal("0.01"))
+    sized_quote = min(amount, affordable)
+
+    if sized_quote < MIN_LIVE_QUOTE:
+        return {
+            "status": "insufficient_funds",
+            **base_response,
+            "usd_balance": format(usd, "f"),
+            "needed": format(MIN_LIVE_QUOTE, "f"),
+        }
+
+    signal = WebhookSignal(
+        signal_id=f"KRAKEN-DCA-{uuid4()}",
+        product_id=normalized,
+        action="BUY",
+        quote_amount=sized_quote,
+        strategy="ACCUMULATE",
+    )
+    order = build_market_order(signal, market_data.get("product", {}))
+    ready_response = {**base_response, "order_ready": True, "order": order}
+
+    if settings.paused:
+        return {"status": "paused", **ready_response}
+
+    if not settings.live_trading:
+        return {"status": "dry_run", **ready_response, "live_trading": False}
+
+    return {
+        "status": "submitted",
+        **ready_response,
+        "submitted": True,
+        "live_trading": True,
+        "kraken_response": submit_kraken_order(order),
+    }
 
 
 async def execute_auto_trade(
@@ -627,6 +720,15 @@ async def health() -> dict[str, Any]:
                 settings.trend_filter_days if settings.trend_filter_enabled else None
             ),
             "risk": risk.snapshot(),
+            "accumulate": (
+                {
+                    "product_id": settings.accumulate_product_id,
+                    "quote_amount": settings.accumulate_quote_amount,
+                    "interval_hours": settings.accumulate_interval_hours,
+                }
+                if settings.accumulate_enabled
+                else None
+            ),
             "scan_in_progress": _scan_in_progress,
             "last_trade_at": (
                 _last_trade_at.isoformat()
@@ -648,6 +750,19 @@ async def godmod3_health() -> dict[str, Any]:
         "providers": godmod3_client.available_providers(),
         "last_provider": godmod3_client.last_provider,
     }
+
+
+@app.post("/accumulate")
+async def accumulate(
+    product_id: str | None = None,
+    quote_amount: Decimal | None = None,
+    x_webhook_secret: str | None = Header(
+        default=None,
+        alias="X-Webhook-Secret",
+    ),
+) -> dict[str, Any]:
+    require_webhook_secret(x_webhook_secret)
+    return await execute_accumulation(product_id, quote_amount)
 
 
 @app.get("/kraken/account")

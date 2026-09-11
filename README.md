@@ -57,6 +57,43 @@ average. Exits are never gated on it.
 Treat this lab as the bar for any new idea. Anything that only looks good in
 sample is noise.
 
+## What actually made money (`scripts/portfolio_lab.py`)
+
+Single-asset timing rules failing says nothing about the documented crypto
+anomalies, which are portfolio-level. `scripts/portfolio_lab.py` takes a
+10-coin basket (4.4 years of daily Coinbase closes) and tests cross-sectional
+momentum, volatility targeting and trend following against simply holding,
+rebalancing weekly and charging turnover.
+
+```bash
+python -m scripts.portfolio_lab
+python -m scripts.portfolio_lab --rebalance-days 14 --top-k 2
+```
+
+Held-out second half (2024-07 → 2026-09), net of 28 bps per side:
+
+| strategy | net | max drawdown |
+| --- | --- | --- |
+| **hold BTC** | **+34.8%** | -53.1% |
+| BTC vol target 50% | +28.6% | -54.5% |
+| BTC trend filter (100d) | -2.6% | -36.8% |
+| xs momentum 90d, top 3 | -33.4% | -73.8% |
+| hold equal-weight basket | -29.8% | -76.8% |
+
+Rotating into the strongest alts was the worst thing tested, in both halves the
+full-sample winner was BTC, and the trend filter's lower drawdown cost 37 points
+of return. Nothing beat owning BTC.
+
+So the mode this repo now ships for making money is the boring one:
+`ACCUMULATE_ENABLED=true` buys `ACCUMULATE_QUOTE_AMOUNT` of spot every
+`ACCUMULATE_INTERVAL_HOURS` and never sells. No LLM call, no ML, no momentum
+gate, no stop-loss — every one of those was measured and every one of them
+subtracted. `POST /accumulate` runs a single tick by hand.
+
+It is not alpha, and it is not free of risk: BTC drew down 53% inside the test
+window and can do it again. It is the only allocation here that survived data
+it was not chosen on.
+
 ## Safe defaults
 - `AUTONOMOUS_ENABLED=false`
 - `ML_ENABLED=false`
@@ -80,6 +117,9 @@ ML training is offline only: normalize completed Kraken OHLCV candles, build cau
 - `DAILY_LOSS_LIMIT`: realized losses past this halt trading until UTC midnight
 - `TREND_FILTER_ENABLED`, `TREND_FILTER_DAYS`: block entries while price is
   below its N-day average; protective exits ignore this filter
+- `ACCUMULATE_ENABLED`, `ACCUMULATE_PRODUCT_ID`, `ACCUMULATE_QUOTE_AMOUNT`,
+  `ACCUMULATE_INTERVAL_HOURS`: scheduled buy-and-hold accumulation; requires
+  `LIVE_TRADING=true` to place real orders
 - `ML_ENABLED`, `ML_PAPER_MODE`, `ML_KILL_SWITCH`
 - `ML_MODEL_PATH`, `ML_CONFIDENCE_THRESHOLD`
 - `ML_MAX_ORDER_QUOTE`, `ML_MAX_POSITION_QUOTE`, `ML_DAILY_LOSS_LIMIT`

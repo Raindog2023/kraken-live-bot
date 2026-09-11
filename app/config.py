@@ -70,5 +70,13 @@ class Settings(BaseSettings):
     trend_filter_enabled: bool = True
     trend_filter_days: int = 100
 
+    # Scheduled accumulation: the one thing in scripts/portfolio_lab.py that
+    # made money out of sample was owning BTC, so buying it on a clock is the
+    # only mode here with evidence behind it. It never sells.
+    accumulate_enabled: bool = False
+    accumulate_product_id: str = "BTC-USD"
+    accumulate_quote_amount: float = 25.0
+    accumulate_interval_hours: float = 168.0
+
 
 settings = Settings()

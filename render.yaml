@@ -23,6 +23,14 @@ services:
         value: "true"
       - key: TREND_FILTER_DAYS
         value: "100"
+      - key: ACCUMULATE_ENABLED
+        value: "false"
+      - key: ACCUMULATE_PRODUCT_ID
+        value: "BTC-USD"
+      - key: ACCUMULATE_QUOTE_AMOUNT
+        value: "25"
+      - key: ACCUMULATE_INTERVAL_HOURS
+        value: "168"
       - key: ML_ENABLED
         value: "false"
       - key: ML_PAPER_MODE
