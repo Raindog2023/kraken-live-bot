@@ -62,11 +62,19 @@ jobs:
             echo "image=${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
           fi
 
+      # dhi.io and Docker Hub both need DOCKER_USERNAME/DOCKER_PASSWORD. They are
+      # legitimately absent on fork pull requests; anywhere else it is a
+      # misconfiguration that would silently publish nothing.
       - name: Report missing credentials
         if: steps.ctx.outputs.has_credentials != 'true'
         run: |
-          echo "::warning::DOCKER_USERNAME/DOCKER_PASSWORD are unavailable (fork pull request?)." \
-            "The base images live in the authenticated dhi.io registry, so the image cannot be built here."
+          message="DOCKER_USERNAME/DOCKER_PASSWORD are unavailable, so the image cannot be built (the base images live in the authenticated dhi.io registry)."
+          if [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ]; then
+            echo "::warning::${message} Expected for a fork pull request."
+            exit 0
+          fi
+          echo "::error::${message} Set both secrets on the repository."
+          exit 1
 
       - name: Set up Docker Buildx
         if: steps.ctx.outputs.has_credentials == 'true'
