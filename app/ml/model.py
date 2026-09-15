@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 import joblib
 from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, VotingClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from .features import FEATURE_COLUMNS
@@ -22,16 +23,60 @@ def train_walk_forward(X: Sequence[Mapping[str,float]], y: Sequence[int], *, min
     return {"accuracy":accuracy,"predictions":preds,"truths":truths,"samples":len(truths)}
 
 def build_pipeline() -> Pipeline:
-    return Pipeline([("scale", StandardScaler()), ("model", LogisticRegression(max_iter=500, random_state=42, class_weight="balanced"))])
+    """Build an ensemble ML pipeline with multiple models for better predictions."""
+    # Create individual models
+    logistic_model = LogisticRegression(max_iter=500, random_state=42, class_weight="balanced")
+    rf_model = RandomForestClassifier(n_estimators=100, random_state=42, class_weight="balanced", max_depth=10)
+    gb_model = GradientBoostingClassifier(n_estimators=100, random_state=42, max_depth=5)
+
+    # Create voting classifier (ensemble)
+    ensemble_model = VotingClassifier(
+        estimators=[
+            ('logistic', logistic_model),
+            ('random_forest', rf_model),
+            ('gradient_boosting', gb_model)
+        ],
+        voting='soft'  # Use probability averaging
+    )
+
+    return Pipeline([("scale", StandardScaler()), ("model", ensemble_model)])
 
 def save_artifact(model: Pipeline, path: str|Path, *, trained_at: datetime|None=None) -> None:
-    joblib.dump({"model":model,"features":list(FEATURE_COLUMNS),"trained_at":(trained_at or datetime.now(timezone.utc)).isoformat()}, path)
+    """Save model artifact with metadata including feature importance."""
+    # Extract feature importance if available
+    feature_importance = None
+    if hasattr(model.named_steps['model'], 'estimators_'):
+        # For VotingClassifier, get importance from underlying models
+        importances = []
+        for name, estimator in model.named_steps['model'].estimators:
+            if hasattr(estimator, 'feature_importances_'):
+                importances.append(estimator.feature_importances_)
+        if importances:
+            feature_importance = [sum(x)/len(x) for x in zip(*importances)]
+
+    artifact = {
+        "model": model,
+        "features": list(FEATURE_COLUMNS),
+        "trained_at": (trained_at or datetime.now(timezone.utc)).isoformat(),
+        "feature_importance": feature_importance,
+        "model_type": "ensemble_voting_classifier"
+    }
+    joblib.dump(artifact, path)
 
 def load_artifact(path: str|Path, *, max_age_seconds: int=86400) -> dict[str,Any]:
+    """Load model artifact with validation and metadata extraction."""
     artifact=joblib.load(path)
     if artifact.get("features") != list(FEATURE_COLUMNS): raise ValueError("model feature schema mismatch")
     trained=datetime.fromisoformat(artifact["trained_at"].replace("Z","+00:00"))
     if (datetime.now(timezone.utc)-trained).total_seconds()>max_age_seconds: raise ValueError("model artifact is stale")
+
+    # Log model type and feature importance if available
+    feature_importance = artifact.get("feature_importance")
+    if feature_importance:
+        # Create feature importance mapping
+        importance_dict = dict(zip(FEATURE_COLUMNS, feature_importance))
+        artifact["feature_importance_dict"] = importance_dict
+
     return artifact
 
 def predict(model_or_artifact: Any, features: Mapping[str,float], *, threshold: float=0.60, latest_timestamp: float|None=None, max_feature_age_seconds: int=900) -> Prediction:

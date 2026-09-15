@@ -164,6 +164,14 @@ class KrakenClient:
                 )
         return candles
 
+    def get_multi_timeframe_data(self, pair: str) -> dict[str, Any]:
+        """Get OHLC data for multiple timeframes (5m, 15m, 1h)."""
+        return {
+            "5m": self.get_ohlc(pair, interval=5),
+            "15m": self.get_ohlc(pair, interval=15),
+            "1h": self.get_ohlc(pair, interval=60),
+        }
+
     def get_market_snapshot(self, pair: str) -> dict[str, Any]:
         ticker = self.get_ticker(pair)
         candles = self.get_ohlc(pair, interval=5)

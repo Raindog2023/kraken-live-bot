@@ -111,35 +111,58 @@ def local_momentum_analysis(
     except (TypeError, ValueError):
         change_24h = 0.0
 
-    score = (
-        (change_5m * 2.0)
-        + (change_15m * 1.5)
-        + change_1h
-        + (change_window * 0.25)
-        + (change_24h * 0.35)
+    volume_change = summary.get("latest_volume_vs_average_percent") or 0.0
+
+    # Enhanced scoring with volume confirmation
+    momentum_score = (
+        (change_5m * 2.5)  # Increased weight for short-term
+        + (change_15m * 2.0)  # Increased weight for medium-term
+        + (change_1h * 1.5)
+        + (change_window * 0.5)
+        + (change_24h * 0.5)
     )
-    if score >= 0.02:
+
+    # Volume confirmation factor
+    volume_factor = 1.0
+    if abs(volume_change) > 20:  # Significant volume change
+        volume_factor = 1.2 if volume_change > 0 else 0.8  # Reward increasing volume
+
+    score = momentum_score * volume_factor
+
+    if score >= 0.015:  # Lowered threshold for more opportunities
         action = "BUY"
-        confidence = min(90, 68 + int(abs(score) * 20))
+        base_confidence = 65 + int(abs(score) * 25)
+        confidence = min(95, base_confidence)  # Cap at 95
+
+        # Check for overbought conditions
+        if change_5m > 0.03 and change_15m > 0.05:  # Very strong short-term momentum
+            confidence = min(confidence - 10, 85)  # Reduce confidence on extreme moves
+
         rationale = (
-            "Local momentum fallback BUY: "
-            f"5m={change_5m:.4f}%, 15m={change_15m:.4f}%, "
-            f"1h={change_1h:.4f}%, 24h={change_24h:.4f}%."
+            f"Enhanced momentum BUY: 5m={change_5m:.4f}%, 15m={change_15m:.4f}%, "
+            f"1h={change_1h:.4f}%, 24h={change_24h:.4f}%, volume_change={volume_change:.2f}%. "
+            f"Score={score:.4f}"
         )
-    elif score <= -0.02:
+    elif score <= -0.015:  # Lowered threshold for more opportunities
         action = "SELL"
-        confidence = min(90, 68 + int(abs(score) * 20))
+        base_confidence = 65 + int(abs(score) * 25)
+        confidence = min(95, base_confidence)  # Cap at 95
+
+        # Check for oversold conditions
+        if change_5m < -0.03 and change_15m < -0.05:  # Very strong short-term decline
+            confidence = min(confidence - 10, 85)  # Reduce confidence on extreme moves
+
         rationale = (
-            "Local momentum fallback SELL: "
-            f"5m={change_5m:.4f}%, 15m={change_15m:.4f}%, "
-            f"1h={change_1h:.4f}%, 24h={change_24h:.4f}%."
+            f"Enhanced momentum SELL: 5m={change_5m:.4f}%, 15m={change_15m:.4f}%, "
+            f"1h={change_1h:.4f}%, 24h={change_24h:.4f}%, volume_change={volume_change:.2f}%. "
+            f"Score={score:.4f}"
         )
     else:
         action = "HOLD"
-        confidence = 55
+        confidence = 50
         rationale = (
-            "Local momentum fallback HOLD: no usable directional bias "
-            f"(score={score:.4f})."
+            f"Enhanced momentum HOLD: no clear directional bias (score={score:.4f}). "
+            f"5m={change_5m:.4f}%, 15m={change_15m:.4f}%, volume_change={volume_change:.2f}%."
         )
     return Godmod3Analysis(
         product_id=product_id,
@@ -222,20 +245,38 @@ def summarize_candles(candles: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 SYSTEM_PROMPT = (
-    "You are a live cryptocurrency trading signal engine. "
+    "You are an advanced cryptocurrency trading signal engine optimized for profitability. "
     "You analyze only and never execute orders. "
     "Base your decision ONLY on the market data supplied in the user message. "
     "Never invent news, indicators, prices, volume, technical signals, or "
     "market conditions that were not provided. "
-    "Prefer BUY or SELL whenever short-term price has a directional bias. "
-    "Use BUY for positive 5m/15m/1h or 24h momentum. "
-    "Use SELL for negative 5m/15m/1h or 24h momentum. "
-    "Use HOLD only when every supplied change is essentially flat. "
-    "Confidence represents how strongly the supplied market data supports "
-    "the chosen action. Return exactly one JSON object containing "
+
+    "TRADING STRATEGY GUIDELINES:"
+    "- Prefer BUY when: strong positive momentum across multiple timeframes (5m, 15m, 1h), "
+    "increasing volume, price near recent lows but showing reversal patterns."
+    "- Prefer SELL when: strong negative momentum across multiple timeframes, "
+    "decreasing volume, price near recent highs showing exhaustion patterns."
+    "- Use HOLD when: conflicting signals across timeframes, low volatility, "
+    "no clear directional bias, or extremely overbought/oversold conditions."
+
+    "CONFIDENCE SCALING:"
+    "- 90-100: Extremely strong signals across all timeframes with volume confirmation"
+    "- 80-89: Strong directional bias with supporting indicators"
+    "- 70-79: Moderate signals with some conflicting factors"
+    "- 60-69: Weak signals, consider only for small positions"
+    "- Below 60: Avoid trading, recommend HOLD"
+
+    "RISK CONSIDERATIONS:"
+    "- Be more conservative during high volatility periods"
+    "- Consider recent performance - if recent candles show reversals, reduce confidence"
+    "- Factor in volume changes - low volume signals are less reliable"
+    "- Consider position sizing - higher confidence justifies larger positions"
+
+    "Return exactly one JSON object containing "
     "product_id, action, confidence, and rationale. "
     "action must be BUY, SELL, or HOLD. "
-    "confidence must be an integer from 0 to 100."
+    "confidence must be an integer from 0 to 100. "
+    "rationale should explain the key factors supporting your decision."
 )
 
 

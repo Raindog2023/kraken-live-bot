@@ -7,7 +7,7 @@ pydantic==2.13.5
 pydantic-settings==2.15.0
 python-dotenv==1.2.3
 uvicorn==0.52.4
-scikit-learn==1.5.2
-joblib==1.4.2
-pytest==8.3.3
-httpx==0.28.1
+scikit-learn==1.9.1
+joblib==1.6.0
+pytest==9.1.1
+numpy>=2.0.0

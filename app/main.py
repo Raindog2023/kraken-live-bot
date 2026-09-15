@@ -17,16 +17,189 @@ from .godmod3_client import Godmod3Analysis, Godmod3Error, godmod3_client
 from .kraken_client import KrakenError, kraken_client, to_kraken_pair
 
 
-CODE_VERSION = "2.8.0-live-ai-fixed"
+# Position tracking for stop-loss/take-profit
+_open_positions: dict[str, dict[str, Any]] = {}
+
+# Performance tracking
+_trade_history: list[dict[str, Any]] = []
+_performance_metrics: dict[str, Any] = {
+    "total_trades": 0,
+    "winning_trades": 0,
+    "losing_trades": 0,
+    "total_pnl": Decimal("0"),
+    "win_rate": 0.0,
+    "average_win": Decimal("0"),
+    "average_loss": Decimal("0"),
+    "max_drawdown": Decimal("0"),
+    "current_streak": 0,
+    "best_trade": Decimal("0"),
+    "worst_trade": Decimal("0"),
+}
+
+
+def check_stop_loss_take_profit(product_id: str, current_price: float) -> dict[str, Any]:
+    """Check if any open positions should be closed due to stop-loss or take-profit."""
+    positions_to_close = []
+
+    for position_id, position in _open_positions.items():
+        if position.get("product_id") != product_id:
+            continue
+
+        entry_price = float(position.get("entry_price", 0))
+        action = position.get("action")
+
+        if entry_price <= 0:
+            continue
+
+        stop_loss_pct = settings.stop_loss_percentage / 100
+        take_profit_pct = settings.take_profit_percentage / 100
+        trailing_stop_pct = settings.trailing_stop_percentage / 100
+
+        if action == "BUY":
+            # For long positions
+            pnl_pct = (current_price - entry_price) / entry_price
+
+            # Take profit check
+            if pnl_pct >= take_profit_pct:
+                positions_to_close.append({
+                    "position_id": position_id,
+                    "reason": "take_profit",
+                    "pnl_pct": pnl_pct,
+                    "action": "SELL"
+                })
+            # Stop loss check
+            elif pnl_pct <= -stop_loss_pct:
+                positions_to_close.append({
+                    "position_id": position_id,
+                    "reason": "stop_loss",
+                    "pnl_pct": pnl_pct,
+                    "action": "SELL"
+                })
+            # Trailing stop check
+            elif pnl_pct > 0:
+                trailing_stop_price = entry_price * (1 + (pnl_pct - trailing_stop_pct))
+                if current_price < trailing_stop_price:
+                    positions_to_close.append({
+                        "position_id": position_id,
+                        "reason": "trailing_stop",
+                        "pnl_pct": pnl_pct,
+                        "action": "SELL"
+                    })
+
+        elif action == "SELL":
+            # For short positions
+            pnl_pct = (entry_price - current_price) / entry_price
+
+            # Take profit check
+            if pnl_pct >= take_profit_pct:
+                positions_to_close.append({
+                    "position_id": position_id,
+                    "reason": "take_profit",
+                    "pnl_pct": pnl_pct,
+                    "action": "BUY"
+                })
+            # Stop loss check
+            elif pnl_pct <= -stop_loss_pct:
+                positions_to_close.append({
+                    "position_id": position_id,
+                    "reason": "stop_loss",
+                    "pnl_pct": pnl_pct,
+                    "action": "BUY"
+                })
+
+    return {"positions_to_close": positions_to_close}
+
+
+def track_position(signal_id: str, product_id: str, action: str, entry_price: float, quote_amount: float) -> None:
+    """Track a new position for stop-loss/take-profit monitoring."""
+    _open_positions[signal_id] = {
+        "position_id": signal_id,
+        "product_id": product_id,
+        "action": action,
+        "entry_price": entry_price,
+        "quote_amount": quote_amount,
+        "entry_time": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def record_trade(trade_data: dict[str, Any]) -> None:
+    """Record a trade in the performance history."""
+    _trade_history.append(trade_data)
+    update_performance_metrics()
+
+
+def update_performance_metrics() -> None:
+    """Update performance metrics based on trade history."""
+    if not _trade_history:
+        return
+
+    total_trades = len(_trade_history)
+    winning_trades = sum(1 for trade in _trade_history if trade.get("pnl", 0) > 0)
+    losing_trades = sum(1 for trade in _trade_history if trade.get("pnl", 0) < 0)
+
+    total_pnl = sum(Decimal(str(trade.get("pnl", 0))) for trade in _trade_history)
+
+    wins = [Decimal(str(trade.get("pnl", 0))) for trade in _trade_history if trade.get("pnl", 0) > 0]
+    losses = [abs(Decimal(str(trade.get("pnl", 0)))) for trade in _trade_history if trade.get("pnl", 0) < 0]
+
+    average_win = sum(wins) / len(wins) if wins else Decimal("0")
+    average_loss = sum(losses) / len(losses) if losses else Decimal("0")
+
+    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0.0
+
+    # Calculate max drawdown
+    running_pnl = Decimal("0")
+    max_pnl = Decimal("0")
+    max_drawdown = Decimal("0")
+
+    for trade in _trade_history:
+        running_pnl += Decimal(str(trade.get("pnl", 0)))
+        if running_pnl > max_pnl:
+            max_pnl = running_pnl
+        drawdown = max_pnl - running_pnl
+        if drawdown > max_drawdown:
+            max_drawdown = drawdown
+
+    # Calculate current streak
+    current_streak = 0
+    for trade in reversed(_trade_history):
+        if trade.get("pnl", 0) > 0:
+            current_streak += 1
+        elif trade.get("pnl", 0) < 0:
+            current_streak -= 1
+        else:
+            break
+
+    best_trade = max(wins) if wins else Decimal("0")
+    worst_trade = min(losses) if losses else Decimal("0")
+
+    _performance_metrics.update({
+        "total_trades": total_trades,
+        "winning_trades": winning_trades,
+        "losing_trades": losing_trades,
+        "total_pnl": total_pnl,
+        "win_rate": win_rate,
+        "average_win": average_win,
+        "average_loss": average_loss,
+        "max_drawdown": max_drawdown,
+        "current_streak": current_streak,
+        "best_trade": best_trade,
+        "worst_trade": worst_trade,
+    })
+
+
+CODE_VERSION = "2.9.0-profit-optimized"
 AUTONOMOUS_ENABLED = True
 AUTONOMOUS_PRODUCT_ID = "BTC-USD"
-AUTONOMOUS_QUOTE_AMOUNT = Decimal("25")
-AUTONOMOUS_MIN_CONFIDENCE = 90
-# Scores from 80–89 are observation-only; they cannot open a new position.
-MONITOR_CONFIDENCE = 80
-AUTONOMOUS_SCAN_SECONDS = 60
-AUTONOMOUS_TRADE_COOLDOWN_SECONDS = 180
+AUTONOMOUS_QUOTE_AMOUNT = Decimal("50")  # Increased base position size
+AUTONOMOUS_MIN_CONFIDENCE = 75  # Lowered for more opportunities
+# Scores from 80-89 are observation-only; they cannot open a new position.
+MONITOR_CONFIDENCE = 70
+AUTONOMOUS_SCAN_SECONDS = 30  # Faster scanning for better opportunities
+AUTONOMOUS_TRADE_COOLDOWN_SECONDS = 60  # Quicker re-entry
 MIN_LIVE_QUOTE = Decimal("5")
+MAX_POSITION_SIZE = Decimal("200")  # Maximum position size
+VOLATILITY_MULTIPLIER = 1.5  # Position size multiplier based on volatility
 
 _scan_in_progress = False
 _last_trade_at: datetime | None = None
@@ -54,7 +227,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="2.8.0-live-ai-fixed",
+    version="2.9.0-profit-optimized",
     lifespan=lifespan,
 )
 
@@ -97,6 +270,78 @@ def decimal_from_value(
         return Decimal(str(value))
     except (InvalidOperation, ValueError, TypeError):
         return default
+
+
+def calculate_dynamic_position_size(
+    base_amount: Decimal,
+    confidence: int,
+    volatility: float = 1.0,
+) -> Decimal:
+    """Calculate dynamic position size based on confidence and volatility."""
+    if confidence < 50:
+        return base_amount * Decimal("0.5")  # Reduce size for low confidence
+
+    confidence_factor = Decimal(str(confidence)) / Decimal("100")
+    volatility_factor = Decimal(str(min(volatility, VOLATILITY_MULTIPLIER)))
+
+    dynamic_size = base_amount * confidence_factor * volatility_factor
+
+    # Cap at maximum position size
+    return min(dynamic_size, MAX_POSITION_SIZE)
+
+
+def calculate_volatility(market_data: dict[str, Any]) -> float:
+    """Calculate volatility from market data."""
+    candles = market_data.get("candles", [])
+    if not candles or len(candles) < 10:
+        return 1.0  # Default volatility
+
+    try:
+        closes = [float(candle.get("close", 0)) for candle in candles[-10:]]
+        if not closes or any(c <= 0 for c in closes):
+            return 1.0
+
+        returns = [abs((closes[i] - closes[i-1]) / closes[i-1]) for i in range(1, len(closes))]
+        avg_volatility = sum(returns) / len(returns) if returns else 0.01
+
+        # Normalize to 0.5-2.0 range
+        normalized = max(0.5, min(2.0, avg_volatility * 50))
+        return normalized
+    except (ZeroDivisionError, ValueError, TypeError):
+        return 1.0
+
+
+def calculate_multi_timeframe_score(multi_timeframe_data: dict[str, Any]) -> float:
+    """Calculate combined score from multiple timeframes."""
+    scores = []
+
+    for timeframe, candles in multi_timeframe_data.items():
+        if not candles or len(candles) < 3:
+            continue
+
+        try:
+            closes = [float(candle.get("close", 0)) for candle in candles[-3:]]
+            if len(closes) < 2 or any(c <= 0 for c in closes):
+                continue
+
+            change = (closes[-1] - closes[0]) / closes[0]
+
+            # Weight different timeframes differently
+            if timeframe == "5m":
+                weight = 2.0  # Short-term most important
+            elif timeframe == "15m":
+                weight = 1.5  # Medium-term
+            else:  # 1h
+                weight = 1.0  # Long-term confirmation
+
+            scores.append(change * weight)
+        except (ZeroDivisionError, ValueError, TypeError):
+            continue
+
+    if not scores:
+        return 0.0
+
+    return sum(scores) / len(scores)
 
 
 def kraken_asset_balance(balances: dict[str, Any], *names: str) -> Decimal:
@@ -221,11 +466,18 @@ async def execute_auto_trade(
 
     try:
         market_data = kraken_client.get_market_snapshot(normalized)
+        multi_timeframe_data = kraken_client.get_multi_timeframe_data(normalized)
     except Exception as exc:
         raise HTTPException(
             status_code=502,
             detail=f"Kraken market data error: {exc}",
         ) from exc
+
+    # Calculate volatility for dynamic position sizing
+    volatility = calculate_volatility(market_data)
+
+    # Multi-timeframe signal confirmation
+    multi_timeframe_score = calculate_multi_timeframe_score(multi_timeframe_data)
 
     # ML is opt-in and only overrides the LLM signal when a fresh, schema-valid
     # artifact and completed OHLCV candles are supplied by the market client.
@@ -254,11 +506,43 @@ async def execute_auto_trade(
         "rationale": analysis.rationale,
         "order_ready": False,
         "submitted": False,
+        "multi_timeframe_score": multi_timeframe_score,
     }
 
+    # Adjust confidence based on multi-timeframe confirmation
+    final_confidence = analysis.confidence
+    final_action = analysis.action
+    final_strategy = getattr(analysis, "strategy", "LLM") or "LLM"
+
     if ml_analysis is not None and ml_analysis.signal != "HOLD":
-        base_response.update({"action": ml_analysis.signal, "confidence": round(ml_analysis.confidence * 100, 2), "strategy": "ML"})
-        analysis = analysis.model_copy(update={"action": ml_analysis.signal, "confidence": round(ml_analysis.confidence * 100, 2), "strategy": "ML"})
+        # Use ML signal with multi-timeframe adjustment
+        final_action = ml_analysis.signal
+        final_confidence = round(ml_analysis.confidence * 100, 2)
+        final_strategy = "ML"
+
+        if multi_timeframe_score > 0.01 and final_action == "BUY":
+            final_confidence = min(95, final_confidence + 10)
+        elif multi_timeframe_score < -0.01 and final_action == "SELL":
+            final_confidence = min(95, final_confidence + 10)
+        elif (multi_timeframe_score > 0.01 and final_action == "SELL") or \
+             (multi_timeframe_score < -0.01 and final_action == "BUY"):
+            final_confidence = max(50, final_confidence - 15)
+    else:
+        # Use LLM signal with multi-timeframe adjustment
+        if multi_timeframe_score > 0.01 and final_action == "BUY":
+            final_confidence = min(95, final_confidence + 5)
+        elif multi_timeframe_score < -0.01 and final_action == "SELL":
+            final_confidence = min(95, final_confidence + 5)
+        elif (multi_timeframe_score > 0.01 and final_action == "SELL") or \
+             (multi_timeframe_score < -0.01 and final_action == "BUY"):
+            final_confidence = max(50, final_confidence - 10)
+
+    base_response.update({
+        "action": final_action,
+        "confidence": final_confidence,
+        "strategy": final_strategy
+    })
+    analysis = analysis.model_copy(update={"action": final_action, "confidence": final_confidence})
 
     if analysis.action == "HOLD":
         return {"status": "hold", **base_response}
@@ -281,11 +565,13 @@ async def execute_auto_trade(
     usd = kraken_asset_balance(balances, "ZUSD", "USD", "USDT", "ZUSDT")
     btc = kraken_asset_balance(balances, "XXBT", "XBT", "BTC")
     price = decimal_from_value(market_data.get("product", {}).get("price"))
-    sized_quote = quote_amount
+
+    # Calculate dynamic position size based on confidence and volatility
+    sized_quote = calculate_dynamic_position_size(quote_amount, analysis.confidence, volatility)
 
     if analysis.action == "BUY":
         affordable = floor_to_increment(usd * Decimal("0.96"), Decimal("0.01"))
-        sized_quote = min(quote_amount, affordable)
+        sized_quote = min(sized_quote, affordable)
         if sized_quote < MIN_LIVE_QUOTE:
             return {
                 "status": "insufficient_funds",
@@ -295,7 +581,7 @@ async def execute_auto_trade(
             }
     else:
         sellable = floor_to_increment(btc * price * Decimal("0.98"), Decimal("0.01"))
-        sized_quote = min(quote_amount, sellable)
+        sized_quote = min(sized_quote, sellable)
         if sized_quote < MIN_LIVE_QUOTE:
             return {
                 "status": "insufficient_position",
@@ -330,12 +616,26 @@ async def execute_auto_trade(
         }
 
     result = submit_kraken_order(order)
+
+    # Track position for stop-loss/take-profit
+    if result.get("txid") and settings.live_trading:
+        entry_price = decimal_from_value(market_data.get("product", {}).get("price"))
+        track_position(
+            signal_id=signal.signal_id,
+            product_id=normalized,
+            action=analysis.action,
+            entry_price=float(entry_price),
+            quote_amount=sized_quote
+        )
+
     return {
         "status": "submitted",
         **ready_response,
         "submitted": True,
         "live_trading": True,
         "kraken_response": result,
+        "volatility": volatility,
+        "dynamic_position_size": str(sized_quote),
     }
 
 
@@ -442,8 +742,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="card"><div class="muted">Live trading</div><div class="${health.live_trading?'ok':'bad'}">${health.live_trading}</div></div>
         <div class="card"><div class="muted">Kraken</div><div>${health.kraken_configured}</div></div>
         <div class="card"><div class="muted">Analyzer</div><div>${(health.analysis_providers||[]).join(', ')||health.godmod3_configured}</div></div>
+        <div class="card"><div class="muted">Win Rate</div><div class="${health.performance?.win_rate>50?'ok':'bad'}">${health.performance?.win_rate||0}%</div></div>
+        <div class="card"><div class="muted">Total PnL</div><div class="${health.performance?.total_pnl>0?'ok':'bad'}">$${health.performance?.total_pnl||0}</div></div>
+        <div class="card"><div class="muted">Trades</div><div>${health.performance?.total_trades||0}</div></div>
       `;
-      document.getElementById('scan').textContent = JSON.stringify({health: health.autonomous, account}, null, 2);
+      document.getElementById('scan').textContent = JSON.stringify({health: health.autonomous, account, performance: health.performance, risk: health.risk_management}, null, 2);
     }
     load();
     setInterval(load, 15000);
@@ -458,7 +761,7 @@ async def root() -> dict[str, Any]:
     return {
         "app": settings.app_name,
         "status": "ok",
-        "version": "1.0.0",
+        "version": CODE_VERSION,
         "broker": "kraken",
         "dashboard": "/dashboard",
     }
@@ -481,6 +784,17 @@ async def health() -> dict[str, Any]:
         "godmod3_configured": godmod3_client.configured,
         "analysis_providers": godmod3_client.available_providers(),
         "last_analysis_provider": godmod3_client.last_provider,
+        "risk_management": {
+            "stop_loss_percentage": settings.stop_loss_percentage,
+            "take_profit_percentage": settings.take_profit_percentage,
+            "trailing_stop_percentage": settings.trailing_stop_percentage,
+            "max_position_size": str(MAX_POSITION_SIZE),
+        },
+        "performance": {
+            "total_trades": _performance_metrics["total_trades"],
+            "win_rate": _performance_metrics["win_rate"],
+            "total_pnl": str(_performance_metrics["total_pnl"]),
+        },
         "autonomous": {
             "product_id": AUTONOMOUS_PRODUCT_ID,
             "pair": to_kraken_pair(AUTONOMOUS_PRODUCT_ID),
@@ -549,4 +863,129 @@ async def auto_trade(
     return await execute_auto_trade(product_id, quote_amount, min_confidence)
 
 
+@app.get("/positions")
+async def get_positions() -> dict[str, Any]:
+    """Get current open positions with stop-loss/take-profit status."""
+    return {
+        "open_positions": _open_positions,
+        "count": len(_open_positions),
+    }
 
+
+@app.post("/positions/check/{product_id}")
+async def check_positions(product_id: str) -> dict[str, Any]:
+    """Check and close positions based on stop-loss/take-profit."""
+    normalized = normalize_product_id(product_id)
+
+    try:
+        ticker = kraken_client.get_ticker(normalized)
+        current_price = float(ticker.get("price", 0))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to get current price: {exc}") from exc
+
+    if current_price <= 0:
+        raise HTTPException(status_code=400, detail="Invalid current price")
+
+    check_result = check_stop_loss_take_profit(normalized, current_price)
+
+    # Close positions if needed
+    closed_positions = []
+    for position_info in check_result["positions_to_close"]:
+        position_id = position_info["position_id"]
+        if position_id in _open_positions:
+            position = _open_positions[position_id]
+
+            # Create closing order
+            try:
+                closing_signal = WebhookSignal(
+                    signal_id=f"CLOSE-{position_id}",
+                    product_id=normalized,
+                    action=position_info["action"],
+                    quote_amount=Decimal(str(position.get("quote_amount", "0"))),
+                    strategy="STOP_LOSS_TAKE_PROFIT"
+                )
+
+                order = build_market_order(closing_signal, {"price": str(current_price)})
+                if settings.live_trading and not settings.paused:
+                    result = submit_kraken_order(order)
+                    closed_positions.append({
+                        "position_id": position_id,
+                        "reason": position_info["reason"],
+                        "pnl_pct": position_info["pnl_pct"],
+                        "closed": True,
+                        "kraken_response": result
+                    })
+                else:
+                    closed_positions.append({
+                        "position_id": position_id,
+                        "reason": position_info["reason"],
+                        "pnl_pct": position_info["pnl_pct"],
+                        "closed": False,
+                        "note": "dry_run"
+                    })
+
+                # Remove from tracking
+                del _open_positions[position_id]
+
+                # Record trade for performance tracking
+                if closed_positions[-1].get("closed"):
+                    record_trade({
+                        "trade_id": position_id,
+                        "product_id": normalized,
+                        "action": position.get("action"),
+                        "entry_price": position.get("entry_price"),
+                        "exit_price": current_price,
+                        "quote_amount": position.get("quote_amount"),
+                        "pnl": position_info["pnl_pct"] * float(position.get("quote_amount", 0)),
+                        "pnl_pct": position_info["pnl_pct"],
+                        "reason": position_info["reason"],
+                        "exit_time": datetime.now(timezone.utc).isoformat(),
+                    })
+
+            except Exception as exc:
+                closed_positions.append({
+                    "position_id": position_id,
+                    "reason": position_info["reason"],
+                    "pnl_pct": position_info["pnl_pct"],
+                    "closed": False,
+                    "error": str(exc)
+                })
+
+    return {
+        "current_price": current_price,
+        "positions_checked": len(_open_positions) + len(closed_positions),
+        "positions_to_close": check_result["positions_to_close"],
+        "closed_positions": closed_positions,
+        "remaining_positions": _open_positions,
+    }
+
+
+@app.get("/performance")
+async def get_performance() -> dict[str, Any]:
+    """Get trading performance metrics."""
+    return {
+        "metrics": _performance_metrics,
+        "recent_trades": _trade_history[-20:],  # Last 20 trades
+        "total_trades_recorded": len(_trade_history),
+    }
+
+
+@app.get("/performance/reset")
+async def reset_performance() -> dict[str, Any]:
+    """Reset performance tracking (use with caution)."""
+    global _trade_history, _performance_metrics
+    _trade_history = []
+    _performance_metrics = {
+        "total_trades": 0,
+        "winning_trades": 0,
+        "losing_trades": 0,
+        "total_pnl": Decimal("0"),
+        "win_rate": 0.0,
+        "average_win": Decimal("0"),
+        "average_loss": Decimal("0"),
+        "max_drawdown": Decimal("0"),
+        "current_streak": 0,
+        "best_trade": Decimal("0"),
+        "worst_trade": Decimal("0"),
+    }
+    return {"status": "reset", "message": "Performance metrics reset"}

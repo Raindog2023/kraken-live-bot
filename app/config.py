@@ -17,9 +17,9 @@ class Settings(BaseSettings):
     ml_kill_switch: bool = False
     ml_confidence_threshold: float = 0.60
     ml_model_path: str = "artifacts/ml_model.joblib"
-    ml_max_order_quote: float = 25.0
-    ml_max_position_quote: float = 100.0
-    ml_daily_loss_limit: float = 25.0
+    ml_max_order_quote: float = 200.0
+    ml_max_position_quote: float = 500.0
+    ml_daily_loss_limit: float = 50.0
     paused: bool = False
     webhook_secret: str = "CHANGE_ME"
 
@@ -51,8 +51,13 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "openai/gpt-4.1-mini"
 
-    max_order_quote: float = 100.0
+    max_order_quote: float = 200.0
     request_timeout_seconds: int = 10
+
+    # Stop-loss and take-profit settings
+    stop_loss_percentage: float = 2.0  # 2% stop loss
+    take_profit_percentage: float = 3.0  # 3% take profit
+    trailing_stop_percentage: float = 1.5  # 1.5% trailing stop
 
 
 settings = Settings()
