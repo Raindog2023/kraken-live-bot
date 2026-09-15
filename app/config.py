@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     max_order_quote: float = 200.0
     request_timeout_seconds: int = 10
 
+    # Runtime directories (named volumes in the Docker deployment).
+    data_dir: str = "data"
+    log_dir: str = "logs"
+    model_dir: str = "models"
+
     # Stop-loss and take-profit settings
     stop_loss_percentage: float = 2.0  # 2% stop loss
     take_profit_percentage: float = 3.0  # 3% take profit
