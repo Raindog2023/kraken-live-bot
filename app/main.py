@@ -10,7 +10,7 @@ from .api.schemas import WebhookSignal  # re-exported for engine.scanner
 from .config import settings
 from .engine.portfolio import portfolio
 from .engine.scanner import autonomous_loop
-from .exchanges import kraken_client
+from .exchanges import coinbase_client, kraken_client
 from .strategies import (
     LLMStrategy,
     MLStrategy,
@@ -35,10 +35,21 @@ def build_aggregator() -> SignalAggregator:
     )
 
 
+def select_exchange():
+    """Pick the active exchange adapter from config."""
+    if settings.active_exchange.lower() == "coinbase":
+        if not settings.coinbase_enabled:
+            raise RuntimeError(
+                "ACTIVE_EXCHANGE=coinbase requires COINBASE_ENABLED=true "
+                "with CDP credentials")
+        return coinbase_client
+    return kraken_client
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     task = asyncio.create_task(
-        autonomous_loop(kraken_client, build_aggregator(), portfolio))
+        autonomous_loop(select_exchange(), build_aggregator(), portfolio))
     try:
         yield
     finally:
@@ -55,7 +66,7 @@ def build_app() -> FastAPI:
     )
     register_routes(
         app,
-        exchange=kraken_client,
+        exchange=select_exchange(),
         aggregator=build_aggregator(),
         store=portfolio,
     )

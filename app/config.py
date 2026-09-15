@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     app_name: str = "kraken-live-bot"
     environment: str = "production"
 
+    # Exchange selection: "kraken" (default) or "coinbase".
+    active_exchange: str = "kraken"
+
     live_trading: bool = False
     ml_enabled: bool = False
     ml_paper_mode: bool = True
