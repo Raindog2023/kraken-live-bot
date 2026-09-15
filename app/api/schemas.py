@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from hmac import compare_digest
+from math import isfinite
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -41,9 +42,25 @@ _NESTED_KEYS = ("data", "payload", "alert")
 def _first(payload: dict[str, Any], keys: tuple[str, ...]) -> Any:
     for key in keys:
         value = payload.get(key)
+        if isinstance(value, str):
+            value = value.strip()
         if value is not None and value != "":
             return value
     return None
+
+
+def _resolve(
+    outer: dict[str, Any],
+    nested: dict[str, Any],
+    keys: tuple[str, ...],
+) -> Any:
+    """Read an aliased field, preferring the outer payload as a whole.
+
+    A nested `symbol` must not override an outer `ticker`: the outer
+    envelope is only fallen back on per alias group, not per key.
+    """
+    value = _first(outer, keys)
+    return _first(nested, keys) if value is None else value
 
 
 class ExternalSignal(BaseModel):
@@ -68,31 +85,34 @@ class ExternalSignal(BaseModel):
         if not isinstance(payload, dict):
             return payload
 
-        flat: dict[str, Any] = {}
+        nested: dict[str, Any] = {}
         for key in _NESTED_KEYS:
-            nested = payload.get(key)
-            if isinstance(nested, dict):
-                flat.update({str(k).lower(): v for k, v in nested.items()})
-        flat.update({str(k).lower(): v for k, v in payload.items()})
+            inner = payload.get(key)
+            if isinstance(inner, dict):
+                nested.update({str(k).lower(): v for k, v in inner.items()})
+        outer = {str(k).lower(): v for k, v in payload.items()}
 
-        raw_action = _first(flat, _ACTION_KEYS)
+        raw_action = _resolve(outer, nested, _ACTION_KEYS)
         action = ACTION_ALIASES.get(str(raw_action).strip().upper()) \
             if raw_action is not None else None
         if action is None:
             raise ValueError(f"unsupported action: {raw_action!r}")
 
-        product = _first(flat, _PRODUCT_KEYS)
+        product = _resolve(outer, nested, _PRODUCT_KEYS)
         if product is None:
             raise ValueError("missing product identifier")
 
+        signal_id = _resolve(outer, nested, _ID_KEYS)
+        strategy = _resolve(outer, nested, _STRATEGY_KEYS)
+
         return {
-            "signal_id": str(_first(flat, _ID_KEYS) or f"SIGNAL8-{uuid4()}"),
+            "signal_id": str(signal_id or f"SIGNAL8-{uuid4()}"),
             "product_id": str(product),
             "action": action,
-            "quote_amount": _first(flat, _AMOUNT_KEYS),
-            "strategy": str(_first(flat, _STRATEGY_KEYS) or "SIGNAL8"),
+            "quote_amount": _resolve(outer, nested, _AMOUNT_KEYS),
+            "strategy": str(strategy or "SIGNAL8"),
             "confidence": _normalize_confidence(
-                _first(flat, _CONFIDENCE_KEYS)),
+                _resolve(outer, nested, _CONFIDENCE_KEYS)),
             "raw": payload,
         }
 
@@ -112,7 +132,9 @@ def _normalize_confidence(value: Any) -> int | None:
     try:
         number = float(value)
     except (TypeError, ValueError):
-        return None
+        raise ValueError(f"unsupported confidence: {value!r}") from None
+    if not isfinite(number):
+        raise ValueError(f"unsupported confidence: {value!r}")
     if 0 <= number <= 1:
         number *= 100
     return max(0, min(100, round(number)))

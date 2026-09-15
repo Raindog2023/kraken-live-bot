@@ -142,6 +142,40 @@ def test_low_confidence_skipped(client, monkeypatch):
     assert body["status"] == "low_confidence"
 
 
+def test_blank_product_rejected(client):
+    response = post(client, {"signal_id": "s8-106", "ticker": "   ",
+                             "side": "long", "size": 25})
+    assert response.status_code == 422
+
+
+def test_outer_payload_wins_across_aliases():
+    signal = ExternalSignal.model_validate({
+        "id": "outer-cross",
+        "ticker": "BTCUSD",
+        "side": "long",
+        "size": 25,
+        "data": {"product_id": "ETHUSD", "action": "short",
+                 "quote_amount": 100},
+    })
+    assert signal.product_id == "BTCUSD"
+    assert signal.action == "BUY"
+    assert signal.quote_amount == Decimal("25")
+
+
+@pytest.mark.parametrize("score", ["garbage", "Infinity", "NaN"])
+def test_unparsable_confidence_rejected(client, score):
+    response = post(client, {"signal_id": f"s8-{score}", "ticker": "BTCUSD",
+                             "side": "long", "size": 25, "score": score})
+    assert response.status_code == 422
+
+
+def test_missing_confidence_skipped_when_minimum_set(client, monkeypatch):
+    monkeypatch.setattr(settings, "webhook_min_confidence", 80)
+    body = post(client, {"signal_id": "s8-107", "symbol": "BTC-USD",
+                         "side": "buy"}).json()
+    assert body["status"] == "low_confidence"
+
+
 def test_kill_switch_blocks(client, monkeypatch):
     monkeypatch.setattr(settings, "emergency_stop", True)
     body = post(client, {"signal_id": "s8-105", "symbol": "BTC-USD",

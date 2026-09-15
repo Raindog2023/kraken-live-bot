@@ -45,8 +45,10 @@ A payload wrapped in `data`, `payload`, or `alert` is unwrapped. The bot
 still owns execution: kill switches (`EMERGENCY_STOP`, `ML_KILL_SWITCH`,
 `PAUSED`), `MAX_ORDER_QUOTE` / position / daily-loss limits, balance
 checks, and paper/live mode all apply. Repeat deliveries of the same
-`signal_id` return `duplicate` without trading. Signals below
-`WEBHOOK_MIN_CONFIDENCE` are skipped. Set `WEBHOOK_SIGNALS_ENABLED=false`
+`signal_id` return `duplicate` without trading. When
+`WEBHOOK_MIN_CONFIDENCE` is set, signals below it — and signals that omit
+confidence — are skipped; a confidence that isn't a finite number is
+rejected rather than treated as absent. Set `WEBHOOK_SIGNALS_ENABLED=false`
 to reject inbound signals entirely.
 
 ## ML and trading guardrails

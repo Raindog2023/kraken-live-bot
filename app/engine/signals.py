@@ -63,7 +63,8 @@ def execute_external_signal(
                 **base_response}
 
     min_confidence = settings.webhook_min_confidence
-    if signal.confidence is not None and signal.confidence < min_confidence:
+    if min_confidence > 0 and (signal.confidence is None
+                               or signal.confidence < min_confidence):
         return {"status": "low_confidence", "minimum_confidence":
                 min_confidence, **base_response}
 
