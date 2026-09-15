@@ -19,7 +19,7 @@ from .strategies import (
     SignalAggregator,
 )
 
-__all__ = ["WebhookSignal", "app", "build_app"]
+__all__ = ["WebhookSignal", "app", "build_app", "build_aggregator"]
 
 
 def build_aggregator() -> SignalAggregator:
@@ -37,10 +37,8 @@ def build_aggregator() -> SignalAggregator:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    exchange = kraken_client
-    aggregator = build_aggregator()
     task = asyncio.create_task(
-        autonomous_loop(exchange, aggregator, portfolio))
+        autonomous_loop(kraken_client, build_aggregator(), portfolio))
     try:
         yield
     finally:
@@ -50,15 +48,17 @@ async def lifespan(app: FastAPI):
 
 
 def build_app() -> FastAPI:
-    exchange = kraken_client
-    aggregator = build_aggregator()
     app = FastAPI(
         title=settings.app_name,
         version=CODE_VERSION,
         lifespan=lifespan,
     )
-    register_routes(app, exchange=exchange, aggregator=aggregator,
-                    store=portfolio)
+    register_routes(
+        app,
+        exchange=kraken_client,
+        aggregator=build_aggregator(),
+        store=portfolio,
+    )
     return app
 
 

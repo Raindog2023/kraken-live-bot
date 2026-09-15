@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     kraken_base_url: str = "https://api.kraken.com"
     kraken_pair: str = "XBTUSD"
 
+    # Coinbase Advanced Trade (CDP API key pair; ES256 JWT per request)
+    coinbase_enabled: bool = False
+    coinbase_api_key_name: str = ""
+    coinbase_private_key: str = ""  # PEM EC private key
+    coinbase_base_url: str = "https://api.coinbase.com"
+
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-5"
     anthropic_base_url: str = "https://api.anthropic.com"

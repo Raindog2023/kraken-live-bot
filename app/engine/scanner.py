@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -9,11 +8,12 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from ..api.schemas import WebhookSignal
 from ..config import settings
-from ..exchanges.base import ExchangeClient, ExchangeError, normalize_product_id
-from ..strategies import Signal, SignalAggregator
+from ..exchanges.base import ExchangeError, normalize_product_id
+from ..strategies import SignalAggregator
 from .executor import build_market_order, submit_market_order
-from .portfolio import Portfolio, portfolio
+from .portfolio import Portfolio
 from .risk import (
     MIN_LIVE_QUOTE,
     asset_balance,
@@ -201,7 +201,8 @@ async def execute_auto_trade(
 
     if final_action == "BUY":
         quote = asset_balance(balances, *quote_assets)
-        affordable = floor_to_increment(quote * Decimal("0.96"), Decimal("0.01"))
+        affordable = floor_to_increment(
+            quote * Decimal("0.96"), Decimal("0.01"))
         sized_quote = min(sized_quote, affordable)
         if sized_quote < MIN_LIVE_QUOTE:
             return {
@@ -232,7 +233,6 @@ async def execute_auto_trade(
     if not allowed:
         return {"status": "risk_blocked", "reason": reason, **base_response}
 
-    from ..api.schemas import WebhookSignal
     signal = WebhookSignal(
         signal_id=f"{exchange.name.upper()}-{uuid4()}",
         product_id=normalized,

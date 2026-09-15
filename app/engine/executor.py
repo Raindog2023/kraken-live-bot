@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Any
 
 from ..config import settings
-from ..exchanges.base import ExchangeClient, ExchangeError, normalize_product_id
+from ..exchanges.base import ExchangeError, normalize_product_id
 from .risk import decimal_from_value, floor_to_increment
 
 

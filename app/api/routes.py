@@ -8,7 +8,6 @@ from fastapi.responses import HTMLResponse
 
 from ..config import settings
 from ..engine.executor import build_market_order, submit_market_order
-from ..engine.portfolio import portfolio
 from ..engine.risk import MAX_POSITION_SIZE, decimal_from_value
 from ..engine.scanner import (
     AUTONOMOUS_MIN_CONFIDENCE,
@@ -21,8 +20,8 @@ from ..engine.scanner import (
     get_scan_state,
 )
 from ..exchanges import ExchangeError, kraken_client, normalize_product_id
-from ..godmod3_client import Godmod3Analysis, Godmod3Error, godmod3_client
 from ..exchanges.kraken import to_kraken_pair
+from ..godmod3_client import Godmod3Analysis, Godmod3Error, godmod3_client
 from .schemas import WebhookSignal, require_webhook_secret
 
 CODE_VERSION = "3.0.0-platform"
