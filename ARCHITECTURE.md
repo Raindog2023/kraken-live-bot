@@ -28,9 +28,10 @@ app/
     portfolio.py           SQLite positions + trades + PnL (persistent)
     executor.py            normalized order build + submit
     scanner.py             multi-pair loop, SL/TP, reconcile, kill-switch
+    signals.py             inbound external-signal execution (/webhook)
     notify.py              alert webhook (fills, breaches, drift)
   api/
-    schemas.py             WebhookSignal + webhook-secret guard
+    schemas.py             WebhookSignal/ExternalSignal + secret guard
     routes.py              all REST endpoints + dashboard
   ml/
     features.py            FEATURE_COLUMNS + indicators (single source)
@@ -109,5 +110,7 @@ Each `SCAN_SECONDS` tick:
 `MAX_ORDER_QUOTE` / `ML_MAX_POSITION_QUOTE` / `ML_DAILY_LOSS_LIMIT` ·
 `STOP_LOSS_PERCENTAGE` / `TAKE_PROFIT_PERCENTAGE` /
 `TRAILING_STOP_PERCENTAGE` · `ALERT_WEBHOOK_URL` · `WEBHOOK_SECRET` ·
+`WEBHOOK_SIGNALS_ENABLED` / `WEBHOOK_DEFAULT_QUOTE` /
+`WEBHOOK_MIN_CONFIDENCE` ·
 `GCP_PROJECT_ID` / `BQ_FEATURES_ENABLED` / `BQ_DATASET` /
 `GCS_MODEL_URI` · `COINBASE_*` CDP credentials · `*_API_KEY` LLM keys.

@@ -14,9 +14,27 @@ on:
 
 env:
   REGISTRY: docker.io
-  IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/kraken-live-bot
+  IMAGE_NAME: ${{ secrets.DOCKER_USERNAME || 'local' }}/kraken-live-bot
 
 jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: python -m pytest -q
+
   build:
     runs-on: ubuntu-latest
     permissions:
@@ -47,7 +65,7 @@ jobs:
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-
+            type=sha,prefix=sha-
 
       - name: Build and push
         uses: docker/build-push-action@v5
@@ -81,6 +99,20 @@ jobs:
 
       - name: Run healthcheck
         run: |
-          docker run --rm -e KRAKEN_API_KEY=test -e KRAKEN_API_SECRET=test \
+          docker run -d --name kraken-test -p 8000:8000 \
+            -e KRAKEN_API_KEY=test -e KRAKEN_API_SECRET=test \
             -e ANTHROPIC_API_KEY=test -e WEBHOOK_SECRET=test \
-            kraken-live-bot:test python /app/docker/healthcheck.py
+            kraken-live-bot:test
+          for attempt in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8000/health > /dev/null; then
+              echo "ok"
+              exit 0
+            fi
+            sleep 3
+          done
+          docker logs kraken-test
+          exit 1
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f kraken-test || true

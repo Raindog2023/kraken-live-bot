@@ -59,6 +59,14 @@ services:
       - key: RECONCILE_EVERY_SCANS
         value: "20"
 
+      # ---- inbound signal webhook ----
+      - key: WEBHOOK_SIGNALS_ENABLED
+        value: "true"
+      - key: WEBHOOK_DEFAULT_QUOTE
+        value: "50"
+      - key: WEBHOOK_MIN_CONFIDENCE
+        value: "0"
+
       # ---- ML ----
       - key: ML_ENABLED
         value: "false"
