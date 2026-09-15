@@ -225,5 +225,26 @@ class KrakenClient:
             raise KrakenError("Kraken AddOrder response was invalid")
         return result
 
+    def get_order_status(self, order_id: str) -> dict[str, Any]:
+        """Query a Kraken order by txid; return normalized status."""
+        result = self._private("QueryOrders", {"txid": order_id})
+        if not isinstance(result, dict) or order_id not in result:
+            raise KrakenError(f"Kraken QueryOrders missing {order_id}")
+        info = result[order_id]
+        status_map = {
+            "closed": "filled", "canceled": "cancelled",
+            "expired": "cancelled", "pending": "open", "open": "open",
+        }
+        descr = info.get("descr") or {}
+        return {
+            "status": status_map.get(str(info.get("status")), "open"),
+            "filled_size": str(info.get("vol_exec", 0)),
+            "avg_price": str(info.get("price", 0)),
+            "fee": str(info.get("fee", 0)),
+            "side": descr.get("type"),
+            "pair": descr.get("pair"),
+            "raw": info,
+        }
+
 
 kraken_client = KrakenClient()

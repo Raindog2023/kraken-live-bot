@@ -23,6 +23,21 @@ services:
       LOG_DIR: "${LOG_DIR:-/var/lib/kraken-bot/logs}"
       MODEL_DIR: "${MODEL_DIR:-/var/lib/kraken-bot/models}"
       DATA_DIR: "${DATA_DIR:-/var/lib/kraken-bot/data}"
+      # Platform controls
+      ACTIVE_EXCHANGE: "${ACTIVE_EXCHANGE:-kraken}"
+      PAPER_TRADING: "${PAPER_TRADING:-true}"
+      EMERGENCY_STOP: "${EMERGENCY_STOP:-false}"
+      ALERT_WEBHOOK_URL: "${ALERT_WEBHOOK_URL:-}"
+      RECONCILE_EVERY_SCANS: "${RECONCILE_EVERY_SCANS:-20}"
+      STOP_LOSS_PERCENTAGE: "${STOP_LOSS_PERCENTAGE:-2.0}"
+      TAKE_PROFIT_PERCENTAGE: "${TAKE_PROFIT_PERCENTAGE:-3.0}"
+      TRAILING_STOP_PERCENTAGE: "${TRAILING_STOP_PERCENTAGE:-1.5}"
+      # GCP feature source (optional)
+      GCP_PROJECT_ID: "${GCP_PROJECT_ID:-}"
+      BQ_FEATURES_ENABLED: "${BQ_FEATURES_ENABLED:-false}"
+      BQ_DATASET: "${BQ_DATASET:-kraken_market}"
+      # Coinbase (when ACTIVE_EXCHANGE=coinbase)
+      COINBASE_ENABLED: "${COINBASE_ENABLED:-false}"
     env_file:
       - .env
     ports:
@@ -52,6 +67,38 @@ services:
     #   - kraken_api_secret
     #   - anthropic_api_key
     #   - webhook_secret
+
+  # Market-data ingest: exchange websockets -> Pub/Sub (GCP pipeline).
+  # Disabled by default; enable with `docker compose --profile ingest up`.
+  ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kraken-live-bot:local
+    profiles: ["ingest"]
+    command: ["python", "ingest/ws_collector.py"]
+    environment:
+      GCP_PROJECT_ID: "${GCP_PROJECT_ID:-}"
+      PUBSUB_CANDLES_TOPIC: "${PUBSUB_CANDLES_TOPIC:-market-candles}"
+      PUBSUB_TICKS_TOPIC: "${PUBSUB_TICKS_TOPIC:-market-ticks}"
+      KRAKEN_PAIRS: "${KRAKEN_WS_PAIRS:-BTC/USD,ETH/USD}"
+      COINBASE_PRODUCTS: "${COINBASE_WS_PRODUCTS:-BTC-USD,ETH-USD}"
+      INGEST_EXCHANGES: "${INGEST_EXCHANGES:-kraken}"
+      GOOGLE_APPLICATION_CREDENTIALS: "${GOOGLE_APPLICATION_CREDENTIALS:-/run/secrets/gcp-sa.json}"
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
 volumes:
   bot_logs:

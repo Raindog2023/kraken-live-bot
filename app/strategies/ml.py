@@ -33,33 +33,40 @@ class MLStrategy:
                 rationale="ml_disabled_or_killed",
             )
 
-        if not market_data.get("ohlcv"):
-            return Signal(
-                strategy=self.name,
-                product_id=product_id,
-                action="HOLD",
-                confidence=0,
-                rationale="no_ohlcv_data",
-            )
-
         try:
             from ..ml.features import normalize_completed_ohlcv, make_features
             from ..ml.model import load_artifact, predict
 
-            candles = normalize_completed_ohlcv(market_data["ohlcv"])
-            feature_rows = make_features(candles)
-            if not feature_rows:
-                return Signal(
-                    strategy=self.name,
-                    product_id=product_id,
-                    action="HOLD",
-                    confidence=0,
-                    rationale="insufficient_feature_rows",
-                )
+            # Prefer pipeline-computed features when the BQ source is enabled.
+            features = None
+            if getattr(settings, "bq_features_enabled", False):
+                from ..ml.bq_features import latest_feature_row
+                features = latest_feature_row(product_id, "kraken")
+
+            if features is None:
+                if not market_data.get("ohlcv"):
+                    return Signal(
+                        strategy=self.name,
+                        product_id=product_id,
+                        action="HOLD",
+                        confidence=0,
+                        rationale="no_ohlcv_data",
+                    )
+                candles = normalize_completed_ohlcv(market_data["ohlcv"])
+                feature_rows = make_features(candles)
+                if not feature_rows:
+                    return Signal(
+                        strategy=self.name,
+                        product_id=product_id,
+                        action="HOLD",
+                        confidence=0,
+                        rationale="insufficient_feature_rows",
+                    )
+                features = feature_rows[-1]
 
             prediction = predict(
                 load_artifact(settings.ml_model_path),
-                feature_rows[-1],
+                features,
                 threshold=settings.ml_confidence_threshold,
             )
         except (OSError, ValueError, KeyError, ImportError) as exc:

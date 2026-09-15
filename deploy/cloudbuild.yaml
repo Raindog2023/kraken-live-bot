@@ -1,0 +1,32 @@
+# Build the Dataflow streaming pipeline as a Flex Template.
+# gcloud builds submit --config deploy/cloudbuild.yaml \
+#   --substitutions=_REGION=us-central1,_BUCKET=$PROJECT-kraken-bot
+substitutions:
+  _REGION: us-central1
+  _BUCKET: ${PROJECT_ID}-kraken-bot
+  _TEMPLATE: market-data-streaming
+
+steps:
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        pip install --no-cache-dir -r pipelines/requirements.txt
+        python pipelines/dataflow_streaming.py \
+          --runner DataflowRunner \
+          --project $PROJECT_ID \
+          --region ${_REGION} \
+          --input_subscription projects/$PROJECT_ID/subscriptions/market-candles-dataflow \
+          --dataset kraken_market \
+          --temp_location gs://${_BUCKET}-dataflow-tmp/temp \
+          --staging_location gs://${_BUCKET}-dataflow-tmp/staging \
+          --template_location gs://${_BUCKET}/templates/${_TEMPLATE}.json \
+          --service_account_email dataflow-worker@$PROJECT_ID.iam.gserviceaccount.com \
+          --max_num_workers 2 \
+          --worker_machine_type n1-standard-1 \
+          --sdk_location container \
+          --sdk_container_image gcr.io/$PROJECT_ID/dataflow/${_TEMPLATE}:latest \
+          --save_main_session
+images:
+  - gcr.io/$PROJECT_ID/dataflow/${_TEMPLATE}:latest

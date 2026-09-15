@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     # Exchange selection: "kraken" (default) or "coinbase".
     active_exchange: str = "kraken"
 
+    # Autonomous scan universe: comma-separated product ids.
+    scan_pairs: str = "BTC-USD,ETH-USD,SOL-USD"
+    scan_seconds: int = 30
+    trade_cooldown_seconds: int = 60
+
     live_trading: bool = False
     ml_enabled: bool = False
     ml_paper_mode: bool = True
@@ -36,6 +41,18 @@ class Settings(BaseSettings):
     coinbase_api_key_name: str = ""
     coinbase_private_key: str = ""  # PEM EC private key
     coinbase_base_url: str = "https://api.coinbase.com"
+
+    # Alerting / ops
+    alert_webhook_url: str = ""
+    emergency_stop: bool = False
+    paper_trading: bool = True
+    reconcile_every_scans: int = 20
+
+    # GCP market-data pipeline (optional; local features are the fallback)
+    gcp_project_id: str = ""
+    bq_features_enabled: bool = False
+    bq_dataset: str = "kraken_market"
+    gcs_model_uri: str = ""  # gs://bucket/path for artifact refresh
 
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-5"

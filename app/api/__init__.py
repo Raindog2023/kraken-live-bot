@@ -1,4 +1,7 @@
-from .routes import register_routes
-from .schemas import WebhookSignal, require_webhook_secret
+"""API package — import submodules directly to avoid import cycles.
 
-__all__ = ["WebhookSignal", "register_routes", "require_webhook_secret"]
+Use `from app.api.routes import register_routes` and
+`from app.api.schemas import WebhookSignal`.
+"""
+
+__all__ = ["routes", "schemas"]

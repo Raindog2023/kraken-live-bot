@@ -18,6 +18,7 @@ from ..engine.scanner import (
     check_stop_loss_take_profit,
     execute_auto_trade,
     get_scan_state,
+    scan_pairs,
 )
 from ..exchanges import ExchangeError, kraken_client, normalize_product_id
 from ..exchanges.kraken import to_kraken_pair
@@ -34,42 +35,72 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Kraken Live Bot</title>
+  <title>Kraken Trading Platform</title>
   <style>
     body { font-family: ui-sans-serif, system-ui, sans-serif; background:#140b0b; color:#ffe8e8; margin:0; }
-    main { max-width: 920px; margin: 0 auto; padding: 24px; }
+    main { max-width: 1080px; margin: 0 auto; padding: 24px; }
     h1 { margin: 0 0 8px; }
+    h3 { margin: 0 0 10px; font-size: 14px; }
     .muted { color:#d79a9a; }
-    .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:12px; margin: 20px 0; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap:12px; margin: 20px 0; }
     .card { background:#22100d; border:1px solid #4a1d1d; border-radius:12px; padding:16px; }
-    .ok { color:#5eead4; } .bad { color:#fda4af; }
-    pre { background:#110606; padding:12px; overflow:auto; border-radius:8px; }
+    .ok { color:#5eead4; } .bad { color:#fda4af; } .warn { color:#fbbf24; }
+    pre { background:#110606; padding:12px; overflow:auto; border-radius:8px; font-size:11px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    td, th { padding:6px 8px; text-align:left; border-bottom:1px solid #3a1717; }
+    th { color:#d79a9a; font-weight:600; }
+    .BUY { color:#5eead4; } .SELL { color:#fda4af; } .HOLD { color:#8a7a7a; }
+    .cols { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+    @media (max-width: 800px) { .cols { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
   <main>
-    <h1>Kraken Live Bot</h1>
-    <p class="muted">XBTUSD autonomous scanner. Portfolio lives in Kraken.</p>
+    <h1>Kraken Trading Platform</h1>
+    <p class="muted">Autonomous scanner &middot; pluggable strategies &middot; <span id="exch"></span></p>
     <div class="grid" id="stats"></div>
-    <div class="card">
-      <h3>Account / last scan</h3>
+    <div class="cols">
+      <div class="card"><h3>Open positions</h3><div id="positions">none</div></div>
+      <div class="card"><h3>Strategy signals (last scan)</h3><div id="signals">none</div></div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <h3>Recent trades / last scan</h3>
       <pre id="scan">loading...</pre>
     </div>
   </main>
   <script>
     async function load() {
       const health = await fetch('/health').then(r => r.json());
-      const account = await fetch('/kraken/account').then(r => r.json()).catch(() => ({error: 'unavailable'}));
+      const perf = await fetch('/performance').then(r => r.json()).catch(() => ({}));
+      const pos = await fetch('/positions').then(r => r.json()).catch(() => ({open_positions:[]}));
+      document.getElementById('exch').textContent = health.exchange || 'kraken';
+      const m = perf.metrics || {};
       document.getElementById('stats').innerHTML = `
-        <div class="card"><div class="muted">Paused</div><div class="${health.paused?'bad':'ok'}">${health.paused}</div></div>
-        <div class="card"><div class="muted">Live trading</div><div class="${health.live_trading?'ok':'bad'}">${health.live_trading}</div></div>
-        <div class="card"><div class="muted">Kraken</div><div>${health.kraken_configured}</div></div>
-        <div class="card"><div class="muted">Analyzer</div><div>${(health.analysis_providers||[]).join(', ')||health.godmod3_configured}</div></div>
-        <div class="card"><div class="muted">Win Rate</div><div class="${health.performance?.win_rate>50?'ok':'bad'}">${health.performance?.win_rate||0}%</div></div>
-        <div class="card"><div class="muted">Total PnL</div><div class="${health.performance?.total_pnl>0?'ok':'bad'}">$${health.performance?.total_pnl||0}</div></div>
-        <div class="card"><div class="muted">Trades</div><div>${health.performance?.total_trades||0}</div></div>
+        <div class="card"><div class="muted">Status</div><div class="${health.paused?'bad':'ok'}">${health.paused?'PAUSED':'RUNNING'}</div></div>
+        <div class="card"><div class="muted">Mode</div><div class="${health.live_trading?'warn':'ok'}">${health.live_trading?'LIVE':'PAPER/DRY'}</div></div>
+        <div class="card"><div class="muted">Exchange</div><div>${health.exchange||'kraken'}</div></div>
+        <div class="card"><div class="muted">Strategies</div><div>${(health.strategies||[]).join(', ')}</div></div>
+        <div class="card"><div class="muted">Win rate</div><div class="${m.win_rate>50?'ok':'bad'}">${(m.win_rate||0).toFixed(1)}%</div></div>
+        <div class="card"><div class="muted">Total PnL</div><div class="${parseFloat(m.total_pnl||0)>0?'ok':'bad'}">$${m.total_pnl||0}</div></div>
+        <div class="card"><div class="muted">Daily PnL</div><div class="${parseFloat(perf.daily_pnl||0)>=0?'ok':'bad'}">$${perf.daily_pnl||0}</div></div>
+        <div class="card"><div class="muted">Max DD</div><div class="bad">$${m.max_drawdown||0}</div></div>
+        <div class="card"><div class="muted">Trades</div><div>${m.total_trades||0} (${m.current_streak||0} streak)</div></div>
+        <div class="card"><div class="muted">Open</div><div>${pos.count||0}</div></div>
       `;
-      document.getElementById('scan').textContent = JSON.stringify({health: health.autonomous, account, performance: health.performance, risk: health.risk_management}, null, 2);
+      const plist = pos.open_positions || [];
+      document.getElementById('positions').innerHTML = plist.length
+        ? '<table><tr><th>id</th><th>pair</th><th>side</th><th>entry</th><th>size</th></tr>' +
+          plist.map(p => `<tr><td>${(p.position_id||'').slice(0,14)}</td><td>${p.product_id}</td>` +
+            `<td class="${p.action}">${p.action}</td><td>${p.entry_price}</td><td>$${p.quote_amount}</td></tr>`).join('') +
+          '</table>' : '<span class="muted">no open positions</span>';
+      const last = (health.autonomous||{}).last_scan || {};
+      const sigs = last.signals || [];
+      document.getElementById('signals').innerHTML = sigs.length
+        ? '<table><tr><th>strategy</th><th>action</th><th>conf</th></tr>' +
+          sigs.map(s => `<tr><td>${s.strategy}</td><td class="${s.action}">${s.action}</td><td>${s.confidence}</td></tr>`).join('') +
+          '</table>' : `<span class="muted">${last.status||'no scan yet'}</span>`;
+      document.getElementById('scan').textContent = JSON.stringify(
+        {last_scan: last, recent_trades: (perf.recent_trades||[]).slice(0,8)}, null, 2);
     }
     load();
     setInterval(load, 15000);
@@ -105,7 +136,11 @@ def register_routes(app: FastAPI, *, exchange, aggregator, store) -> None:
             "code_version": CODE_VERSION,
             "autonomous_enabled": True,
             "live_trading": settings.live_trading,
+            "paper_trading": getattr(settings, "paper_trading", True),
             "paused": settings.paused,
+            "exchange": exchange.name,
+            "exchange_configured": exchange.configured,
+            "strategies": [s.name for s in aggregator.strategies],
             "kraken_configured": kraken_client.configured,
             "godmod3_configured": godmod3_client.configured,
             "analysis_providers": godmod3_client.available_providers(),
@@ -124,6 +159,7 @@ def register_routes(app: FastAPI, *, exchange, aggregator, store) -> None:
             },
             "autonomous": {
                 "product_id": AUTONOMOUS_PRODUCT_ID,
+                "pairs": scan_pairs(),
                 "pair": exchange.to_product_id(AUTONOMOUS_PRODUCT_ID),
                 "scan_seconds": AUTONOMOUS_SCAN_SECONDS,
                 "quote_amount": str(AUTONOMOUS_QUOTE_AMOUNT),

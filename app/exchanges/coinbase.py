@@ -263,5 +263,28 @@ class CoinbaseClient:
             "raw": result,
         }
 
+    def get_order_status(self, order_id: str) -> dict[str, Any]:
+        """Query a Coinbase order by order_id; return normalized status."""
+        result = self._request(
+            "GET", f"{_REST_PREFIX}/orders/historical/{order_id}")
+        order = (result or {}).get("order") if isinstance(result, dict) else None
+        if not isinstance(order, dict):
+            raise CoinbaseError(f"Coinbase order {order_id} not found")
+        status_map = {
+            "FILLED": "filled", "CANCELLED": "cancelled",
+            "EXPIRED": "cancelled", "FAILED": "rejected",
+            "OPEN": "open", "PENDING": "open", "QUEUED": "open",
+        }
+        completion = order.get("completion_display") or {}
+        return {
+            "status": status_map.get(str(order.get("status")), "open"),
+            "filled_size": str(completion.get("filled_size", 0)),
+            "avg_price": str(completion.get("average_filled_price", 0)),
+            "fee": str(completion.get("total_fees", 0)),
+            "side": order.get("side"),
+            "pair": order.get("product_id"),
+            "raw": order,
+        }
+
 
 coinbase_client = CoinbaseClient()

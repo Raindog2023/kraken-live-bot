@@ -104,6 +104,11 @@ class ExchangeClient(Protocol):
         """Submit a market order; return exchange-native result dict."""
         ...
 
+    def get_order_status(self, order_id: str) -> dict[str, Any]:
+        """Return {"status": "open|filled|cancelled|rejected", "filled_size",
+        "avg_price", "fee", "raw"} — normalized order state."""
+        ...
+
 
 def normalize_product_id(product_id: str) -> str:
     """Exchange-agnostic product id normalization (Coinbase-style BASE-QUOTE)."""
