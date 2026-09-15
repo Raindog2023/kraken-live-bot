@@ -2,28 +2,89 @@ services:
   - type: web
     name: kraken-live-bot
     runtime: python
+    plan: starter
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    # Persistent disk so portfolio.db / models / logs survive restarts+deploys.
+    disk:
+      name: kraken-bot-data
+      mountPath: /var/lib/kraken-bot
+      sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.0"
+
+      # ---- safety defaults (paper-first; flip LIVE_TRADING only via UI) ----
       - key: LIVE_TRADING
         value: "false"
-      - key: ML_ENABLED
-        value: "false"
-      - key: ML_PAPER_MODE
+      - key: PAPER_TRADING
         value: "true"
+      - key: EMERGENCY_STOP
+        value: "false"
       - key: ML_KILL_SWITCH
         value: "false"
       - key: PAUSED
         value: "false"
+      - key: ENVIRONMENT
+        value: "production"
+
+      # ---- exchange + scan universe ----
+      - key: ACTIVE_EXCHANGE
+        value: "kraken"
       - key: KRAKEN_BASE_URL
         value: "https://api.kraken.com"
       - key: KRAKEN_PAIR
         value: "XBTUSD"
+      - key: SCAN_PAIRS
+        value: "BTC-USD,ETH-USD,SOL-USD"
+      - key: SCAN_SECONDS
+        value: "30"
+      - key: TRADE_COOLDOWN_SECONDS
+        value: "60"
+
+      # ---- risk limits (cautious) ----
+      - key: MAX_ORDER_QUOTE
+        value: "200"
+      - key: ML_MAX_POSITION_QUOTE
+        value: "500"
+      - key: ML_DAILY_LOSS_LIMIT
+        value: "50"
+      - key: STOP_LOSS_PERCENTAGE
+        value: "2.0"
+      - key: TAKE_PROFIT_PERCENTAGE
+        value: "3.0"
+      - key: TRAILING_STOP_PERCENTAGE
+        value: "1.5"
+      - key: RECONCILE_EVERY_SCANS
+        value: "20"
+
+      # ---- ML ----
+      - key: ML_ENABLED
+        value: "false"
+      - key: ML_PAPER_MODE
+        value: "true"
+      - key: ML_CONFIDENCE_THRESHOLD
+        value: "0.60"
+      - key: ML_MODEL_PATH
+        value: "/var/lib/kraken-bot/models/ml_model.joblib"
+
+      # ---- dirs (on the persistent disk) ----
+      - key: DATA_DIR
+        value: "/var/lib/kraken-bot/data"
+      - key: LOG_DIR
+        value: "/var/lib/kraken-bot/logs"
+      - key: MODEL_DIR
+        value: "/var/lib/kraken-bot/models"
+
+      # ---- secrets (set in Render dashboard, never in repo) ----
       - key: KRAKEN_API_KEY
         sync: false
       - key: KRAKEN_API_SECRET
+        sync: false
+      - key: COINBASE_API_KEY_NAME
+        sync: false
+      - key: COINBASE_PRIVATE_KEY
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
@@ -32,6 +93,8 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: PERPLEXITY_API_KEY
+        sync: false
+      - key: ALERT_WEBHOOK_URL
         sync: false
       - key: WEBHOOK_SECRET
         generateValue: true
