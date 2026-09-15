@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     paused: bool = False
     webhook_secret: str = "CHANGE_ME"
 
+    # Inbound signal webhook (external providers, e.g. signal8).
+    webhook_signals_enabled: bool = True
+    webhook_default_quote: float = 50.0
+    webhook_min_confidence: int = 0
+
     kraken_api_key: str = ""
     kraken_api_secret: str = ""
     kraken_base_url: str = "https://api.kraken.com"

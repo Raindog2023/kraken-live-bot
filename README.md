@@ -17,6 +17,38 @@ ML training is offline only: normalize completed Kraken OHLCV candles, build cau
 - `ANTHROPIC_API_KEY` (or another configured analysis provider)
 - `WEBHOOK_SECRET`
 
+## Inbound signals (signal8 and other providers)
+
+`POST /webhook` executes a signal from an external provider. Send the
+`X-Webhook-Secret` header matching `WEBHOOK_SECRET`:
+
+```bash
+curl -X POST https://<host>/webhook \
+  -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"signal_id":"s8-1","ticker":"BTCUSD","side":"long","size":75,"confidence":0.82}'
+```
+
+Field names are mapped from common provider aliases, so the payload does
+not need renaming:
+
+| Canonical | Accepted aliases |
+|---|---|
+| `signal_id` | `id`, `alert_id`, `uuid`, `event_id` (a UUID is generated if absent) |
+| `product_id` | `ticker`, `symbol`, `pair`, `market`, `instrument`, `asset` |
+| `action` | `side`, `signal`, `direction`, `order_action` — `long`/`buy`/`bid` → BUY, `short`/`sell`/`exit_long` → SELL, `flat`/`hold` → ignored |
+| `quote_amount` | `quote_size`, `notional`, `amount`, `size`, `quantity`, `usd` (falls back to `WEBHOOK_DEFAULT_QUOTE`) |
+| `confidence` | `score`, `strength`, `probability` (0-1 inputs are scaled to 0-100) |
+| `strategy` | `strategy_name`, `source`, `bot` |
+
+A payload wrapped in `data`, `payload`, or `alert` is unwrapped. The bot
+still owns execution: kill switches (`EMERGENCY_STOP`, `ML_KILL_SWITCH`,
+`PAUSED`), `MAX_ORDER_QUOTE` / position / daily-loss limits, balance
+checks, and paper/live mode all apply. Repeat deliveries of the same
+`signal_id` return `duplicate` without trading. Signals below
+`WEBHOOK_MIN_CONFIDENCE` are skipped. Set `WEBHOOK_SIGNALS_ENABLED=false`
+to reject inbound signals entirely.
+
 ## ML and trading guardrails
 - `ML_ENABLED`, `ML_PAPER_MODE`, `ML_KILL_SWITCH`
 - `ML_MODEL_PATH`, `ML_CONFIDENCE_THRESHOLD`

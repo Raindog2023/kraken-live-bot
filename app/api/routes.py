@@ -20,10 +20,11 @@ from ..engine.scanner import (
     get_scan_state,
     scan_pairs,
 )
+from ..engine.signals import execute_external_signal
 from ..exchanges import ExchangeError, kraken_client, normalize_product_id
 from ..exchanges.kraken import to_kraken_pair
 from ..godmod3_client import Godmod3Analysis, Godmod3Error, godmod3_client
-from .schemas import WebhookSignal, require_webhook_secret
+from .schemas import ExternalSignal, WebhookSignal, require_webhook_secret
 
 CODE_VERSION = "3.0.0-platform"
 
@@ -167,6 +168,15 @@ def register_routes(app: FastAPI, *, exchange, aggregator, store) -> None:
                 "trade_cooldown_seconds": AUTONOMOUS_TRADE_COOLDOWN_SECONDS,
                 **scan,
             },
+            "inbound_signals": {
+                "endpoint": "/webhook",
+                "enabled": settings.webhook_signals_enabled,
+                "default_quote": settings.webhook_default_quote,
+                "min_confidence": settings.webhook_min_confidence,
+                "secret_configured": bool(
+                    settings.webhook_secret
+                    and settings.webhook_secret != "CHANGE_ME"),
+            },
         }
 
     @app.get("/godmod3/health")
@@ -216,6 +226,21 @@ def register_routes(app: FastAPI, *, exchange, aggregator, store) -> None:
         return await execute_auto_trade(
             exchange, product_id, quote_amount, min_confidence,
             aggregator, store)
+
+    @app.post("/webhook")
+    async def inbound_signal(
+        signal: ExternalSignal,
+        x_webhook_secret: str | None = Header(
+            default=None,
+            alias="X-Webhook-Secret",
+        ),
+    ) -> dict[str, Any]:
+        """Execute a signal posted by an external provider (e.g. signal8)."""
+        require_webhook_secret(x_webhook_secret)
+        try:
+            return execute_external_signal(exchange, signal, store)
+        except ExchangeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.get("/positions")
     async def get_positions() -> dict[str, Any]:
