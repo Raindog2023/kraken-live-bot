@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     scan_seconds: int = 30
     trade_cooldown_seconds: int = 60
 
-    live_trading: bool = False
+    live_trading: bool = True
     ml_enabled: bool = False
     ml_paper_mode: bool = True
     ml_kill_switch: bool = False
@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     kraken_pair: str = "XBTUSD"
 
     # Coinbase Advanced Trade (CDP API key pair; ES256 JWT per request)
-    coinbase_enabled: bool = False
+    coinbase_enabled: bool = True
     coinbase_api_key_name: str = ""
     coinbase_private_key: str = ""  # PEM EC private key
     coinbase_base_url: str = "https://api.coinbase.com"
