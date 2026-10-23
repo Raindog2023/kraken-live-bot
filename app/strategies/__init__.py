@@ -4,6 +4,7 @@ from .llm import LLMStrategy
 from .mean_reversion import MeanReversionStrategy
 from .ml import MLStrategy
 from .momentum import MomentumStrategy
+from .supernova import SupernovaStrategy
 
 __all__ = [
     "Action",
@@ -14,4 +15,5 @@ __all__ = [
     "Signal",
     "SignalAggregator",
     "Strategy",
+    "SupernovaStrategy",
 ]

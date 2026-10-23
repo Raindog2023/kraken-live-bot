@@ -17,6 +17,7 @@ from .strategies import (
     MeanReversionStrategy,
     MomentumStrategy,
     SignalAggregator,
+    SupernovaStrategy,
 )
 
 __all__ = ["WebhookSignal", "app", "build_app", "build_aggregator"]
@@ -30,6 +31,7 @@ def build_aggregator() -> SignalAggregator:
             MeanReversionStrategy(),
             LLMStrategy(),
             MLStrategy(),
+            SupernovaStrategy(),
         ],
         mode="weighted_vote",
     )
